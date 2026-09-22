@@ -651,16 +651,6 @@ class GatewayModelCommandsMixin:
             source=event.source, session_key=session_key, model=_session_model,
         )
         platform_key = _platform_config_key(event.source.platform)
-        if raw_args:  # typed path — same applier the picker uses
-            return self._apply_reasoning_selection(session_key, platform_key, args, persist_global=persist_global)
-        rc = self._reasoning_config
-        if rc is None:
-            level, current_effort = t("gateway.reasoning.level_default"), "medium"
-        elif rc.get("enabled") is False:
-            level, current_effort = t("gateway.reasoning.level_disabled"), "none"
-        else:
-            level = current_effort = rc.get("effort", "medium")
-        display_state = t("gateway.reasoning.display_on") if self._show_reasoning else t("gateway.reasoning.display_off")
         # Offer what the route declares, not the shared ladder (upstream PR 119110).
         # Undeclared stays fail-open: the full ladder, exactly as before.
         from agent.reasoning_effort import declared_route_efforts
@@ -678,6 +668,23 @@ class GatewayModelCommandsMixin:
             _session_model or _model_cfg.get("default") or _model_cfg.get("model"),
             config=_cfg,
         )
+        if raw_args:  # typed path — same applier the picker uses
+            _asked = str(args or "").strip().lower()
+            # Un nivel que la ruta no declara se rechaza con los que sí admite: aplicarlo
+            # daría 400 en el endpoint o se recortaría en silencio a algo que el usuario
+            # no escribió, que es justo el bicho que tenía este comando.
+            from agent.reasoning_effort import EFFORT_LADDER
+            if _declared is not None and _asked in EFFORT_LADDER and _asked not in _declared:
+                return t("gateway.reasoning.undeclared_level", arg=_asked, levels=", ".join(_declared))
+            return self._apply_reasoning_selection(session_key, platform_key, args, persist_global=persist_global)
+        rc = self._reasoning_config
+        if rc is None:
+            level, current_effort = t("gateway.reasoning.level_default"), "medium"
+        elif rc.get("enabled") is False:
+            level, current_effort = t("gateway.reasoning.level_disabled"), "none"
+        else:
+            level = current_effort = rc.get("effort", "medium")
+        display_state = t("gateway.reasoning.display_on") if self._show_reasoning else t("gateway.reasoning.display_off")
         _offered = VALID_REASONING_EFFORTS if _declared is None else tuple(
             level for level in VALID_REASONING_EFFORTS if level in _declared
         )
