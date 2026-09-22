@@ -667,7 +667,10 @@ class GatewayModelCommandsMixin:
         from gateway.run import _load_gateway_config
         _cfg = {}
         with contextlib.suppress(Exception):  # fail-open on config read errors, like /model does
-            _cfg = _load_gateway_config(config_path=self.config_path) or {}
+            # GatewayRunner no tiene `config_path` en esta versión (es de otro dataclass):
+            # sin el getattr, el AttributeError se tragaba la declaración y el picker
+            # volvía a la escalera completa. Sin ruta, el loader usa el home activo.
+            _cfg = _load_gateway_config(config_path=getattr(self, "config_path", None)) or {}
         _model_cfg = _cfg.get("model", {}) or {}
         _session_route = ((getattr(self, "_session_model_overrides", {}) or {}).get(session_key) or {})
         _declared = declared_route_efforts(

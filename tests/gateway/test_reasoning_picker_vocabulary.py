@@ -86,7 +86,9 @@ async def _collect_offered_values(tmp_path, monkeypatch, config_text):
 
     captured: list = []
     runner = _make_runner(captured)
-    runner.config_path = config_path
+    # A PROPÓSITO no se fija `runner.config_path`: este GatewayRunner no lo tiene, y fijarlo
+    # en el test escondía que el código de producción petaba al leerlo (22-09, medido en el
+    # pod: el picker seguía ofreciendo los siete niveles). El loader usa el home activo.
 
     assert await runner._handle_reasoning_command(_make_event()) is None
     return [choice["value"] for choice in captured]
