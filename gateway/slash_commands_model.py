@@ -661,6 +661,23 @@ class GatewayModelCommandsMixin:
         else:
             level = current_effort = rc.get("effort", "medium")
         display_state = t("gateway.reasoning.display_on") if self._show_reasoning else t("gateway.reasoning.display_off")
+        # Offer what the route declares, not the shared ladder (upstream PR 119110).
+        # Undeclared stays fail-open: the full ladder, exactly as before.
+        from agent.reasoning_effort import declared_route_efforts
+        from gateway.run import _load_gateway_config
+        _cfg = {}
+        with contextlib.suppress(Exception):  # fail-open on config read errors, like /model does
+            _cfg = _load_gateway_config(config_path=self.config_path) or {}
+        _model_cfg = _cfg.get("model", {}) or {}
+        _session_route = ((getattr(self, "_session_model_overrides", {}) or {}).get(session_key) or {})
+        _declared = declared_route_efforts(
+            _session_route.get("provider") or _model_cfg.get("provider"),
+            _session_model or _model_cfg.get("default") or _model_cfg.get("model"),
+            config=_cfg,
+        )
+        _offered = VALID_REASONING_EFFORTS if _declared is None else tuple(
+            level for level in VALID_REASONING_EFFORTS if level in _declared
+        )
         has_session_override = session_key in (getattr(self, "_session_reasoning_overrides", {}) or {})
         scope = t("gateway.reasoning.scope_session") if has_session_override else t("gateway.reasoning.scope_global")
 
@@ -673,7 +690,7 @@ class GatewayModelCommandsMixin:
             title=t("gateway.reasoning.picker_title", level=level, scope=scope, display=display_state),
             choices=[
                 {"value": "none", "label": t("gateway.reasoning.choice_none"), "is_current": current_effort == "none"},
-                *({"value": lv, "label": lv, "is_current": lv == current_effort} for lv in VALID_REASONING_EFFORTS),
+                *({"value": lv, "label": lv, "is_current": lv == current_effort} for lv in _offered),
                 *({"value": v, "label": t(f"gateway.reasoning.choice_{v}"), "is_current": False}
                   for v in ("reset", "show", "hide")),
             ],

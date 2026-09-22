@@ -148,6 +148,48 @@ def clamp_effort(
     return max(below, key=EFFORT_LADDER.index) if below else min(candidates, key=EFFORT_LADDER.index)
 
 
+def _config_declared_efforts(provider, model, config=None):
+    """``providers.<provider>.models.<model>.reasoning_efforts`` from config, or None."""
+    name, model_id = str(provider or "").strip(), str(model or "").strip()
+    if not name or not model_id:
+        return None
+    try:
+        if config is None:
+            from hermes_cli.config import load_config_readonly
+
+            config = load_config_readonly()
+        providers = (config or {}).get("providers")
+        entry = providers.get(name) if isinstance(providers, dict) else None
+        models = entry.get("models") if isinstance(entry, dict) else None
+        row = models.get(model_id) if isinstance(models, dict) else None
+        declared = row.get("reasoning_efforts") if isinstance(row, dict) else None
+    except Exception:  # config is user input: never break a command over it
+        return None
+    return tuple(declared) if isinstance(declared, (list, tuple)) else None
+
+
+def declared_route_efforts(provider, model, config=None):
+    """Vocabulary the (provider, model) route DECLARES, or ``None`` when nothing declares one.
+
+    Config declaration first (the user configured that route on purpose), then
+    ``ProviderProfile.supported_reasoning_efforts``. ``None`` keeps callers fail-open on the
+    shared ladder; an empty tuple is a declaration of its own.
+    """
+    declared = _config_declared_efforts(provider, model, config)
+    if declared is None:
+        try:
+            from providers import get_provider_profile
+
+            profile = get_provider_profile(provider) if provider else None
+            declared = profile.supported_reasoning_efforts(model) if profile is not None else None
+        except Exception:  # a plugin profile must never break the caller
+            declared = None
+    if declared is None:
+        return None
+    levels = dict.fromkeys(str(level).strip().lower() for level in declared)
+    return tuple(level for level in levels if level in EFFORT_LADDER)
+
+
 def requested_effort(reasoning_config: Optional[dict]) -> Optional[str]:
     """The user's explicit effort, or None (absent/malformed config, no effort, or reasoning
     disabled) — callers then omit the wire field."""
