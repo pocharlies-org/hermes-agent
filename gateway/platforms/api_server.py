@@ -2061,6 +2061,12 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         session_key = gateway_session_key or session_id
         session_row_model = _clean_request_string(session_model)
         current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+        # A named ``providers:`` entry resolves to the bare runtime provider "custom"; re-resolving
+        # "custom" drops that identity (falls to OpenRouter with no key -> "No LLM provider
+        # configured" on every resumed session). Re-resolve by the configured name instead.
+        if current_provider == "custom":
+            current_provider = (
+                _clean_request_string(runtime_kwargs.get("requested_provider")) or current_provider)
         session_override = None if confirmed_runtime_lock else self._session_model_override_for(session_key)
         # Model-string precedence (override > session-persisted > global) is owned by
         # hermes_cli.model_switch.resolve_effective_model.
