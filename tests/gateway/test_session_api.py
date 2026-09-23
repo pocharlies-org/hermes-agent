@@ -972,3 +972,106 @@ async def test_patch_session_still_rejects_unknown_fields(adapter, session_db):
         resp = await cli.patch(f"/api/sessions/{session_id}", json={"nonsense": 1})
         assert resp.status == 400, await resp.text()
         assert (await resp.json())["error"]["code"] == "unsupported_session_field"
+
+
+# ---------------------------------------------------------------------------
+# clarify over /chat/stream: ``clarify`` event + POST /clarify/{id} answers it
+# ---------------------------------------------------------------------------
+
+
+def _clarify_app(adapter: APIServerAdapter) -> web.Application:
+    app = _create_session_app(adapter)
+    app.router.add_post(
+        "/api/sessions/{session_id}/clarify/{clarify_id}", adapter._handle_session_clarify)
+    return app
+
+
+def _sse_events(body: str):
+    import json as _json
+
+    out = []
+    for block in body.split("\n\n"):
+        name, data = None, None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = _json.loads(line[len("data: "):])
+        if name:
+            out.append((name, data))
+    return out
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_clarify_event_and_answer(adapter, session_db):
+    """The agent's clarify blocks until the client answers through the clarify route."""
+    session_id = session_db.create_session("clarify-session", "api_server")
+    seen = {}
+
+    async def fake_run(**kwargs):
+        callback = kwargs["clarify_callback"]
+        loop = asyncio.get_running_loop()
+        answer = await loop.run_in_executor(
+            None, lambda: callback("¿Qué motor?", ["Krea2", "Ideogram"], multi_select=False))
+        seen["answer"] = answer
+        return {"final_response": f"Vale, {answer}.", "session_id": session_id, "messages": []}, {}
+
+    app = _clarify_app(adapter)
+    with patch.object(adapter, "_run_agent", side_effect=fake_run):
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(f"/api/sessions/{session_id}/chat/stream", json={"message": "una imagen"})
+            assert resp.status == 200
+            clarify = None
+            buf = ""
+            while clarify is None:
+                chunk = await asyncio.wait_for(resp.content.readany(), timeout=5)
+                assert chunk, buf
+                buf += chunk.decode()
+                for name, data in _sse_events(buf):
+                    if name == "clarify":
+                        clarify = data
+            assert clarify["question"] == "¿Qué motor?"
+            assert clarify["choices"] == ["Krea2", "Ideogram"]
+            assert clarify["multi_select"] is False
+
+            wrong = await cli.post(f"/api/sessions/other/clarify/{clarify['clarify_id']}", json={"response": "x"})
+            assert wrong.status == 404
+            empty = await cli.post(f"/api/sessions/{session_id}/clarify/{clarify['clarify_id']}", json={"response": " "})
+            assert empty.status == 400
+
+            ok = await cli.post(f"/api/sessions/{session_id}/clarify/{clarify['clarify_id']}", json={"response": "Ideogram"})
+            assert ok.status == 200
+            again = await cli.post(f"/api/sessions/{session_id}/clarify/{clarify['clarify_id']}", json={"response": "Krea2"})
+            assert again.status in (404, 409)
+
+            rest = buf + (await asyncio.wait_for(resp.text(), timeout=5))
+
+    assert seen["answer"] == "Ideogram"
+    names = [n for n, _ in _sse_events(rest)]
+    assert names.index("clarify") < names.index("assistant.completed") < names.index("done")
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_tool_results_are_opt_in(adapter, session_db):
+    session_id = session_db.create_session("tool-result-session", "api_server")
+
+    async def fake_run(**kwargs):
+        progress = kwargs["tool_progress_callback"]
+        progress("tool.started", "studio_generate_image", "krea2", {"prompt": "a cat"})
+        progress("tool.completed", "studio_generate_image", None, None,
+                 duration=1.0, is_error=False, result='{"id": "cr-1", "status": "queued"}')
+        return {"final_response": "ok", "session_id": session_id, "messages": []}, {}
+
+    app = _create_session_app(adapter)
+    with patch.object(adapter, "_run_agent", side_effect=fake_run):
+        async with TestClient(TestServer(app)) as cli:
+            plain = await (await cli.post(f"/api/sessions/{session_id}/chat/stream", json={"message": "a"})).text()
+            rich = await (await cli.post(
+                f"/api/sessions/{session_id}/chat/stream",
+                json={"message": "a", "include_tool_results": True})).text()
+
+    plain_done = [d for n, d in _sse_events(plain) if n == "tool.completed"][0]
+    rich_done = [d for n, d in _sse_events(rich) if n == "tool.completed"][0]
+    assert "result" not in plain_done
+    assert rich_done["result"] == '{"id": "cr-1", "status": "queued"}'
+    assert rich_done["is_error"] is False
