@@ -69,6 +69,7 @@ _STATIC_FEATURE_FLAGS = {
     "run_approval_response": True, "tool_progress_events": True, "approval_events": True,
     "session_resources": True, "model_options": True, "session_chat": True,
     "session_chat_streaming": True, "session_fork": True, "session_model_lock": True,
+    "session_clarify": True,
     "admin_config_rw": False, "jobs_admin": False, "memory_write_api": False,
     "skills_api": True, "audio_api": False, "realtime_voice": False,
     "session_continuity_header": "X-Hermes-Session-Id",
@@ -94,6 +95,7 @@ _CAPABILITY_ENDPOINTS = (
     ("session_chat", ("POST", "/api/sessions/{session_id}/chat")),
     ("session_chat_stream", ("POST", "/api/sessions/{session_id}/chat/stream")),
     ("session_model_lock", ("POST", "/api/sessions/{session_id}/model")),
+    ("session_clarify", ("POST", "/api/sessions/{session_id}/clarify/{clarify_id}")),
     ("browser_control_register", ("POST", "/v1/browser-control/register")),
     ("browser_control_ws", ("GET", "/v1/browser-control/ws")),
     ("artifact_upload", ("POST", "/v1/artifacts/upload")),
@@ -1056,6 +1058,29 @@ class _ProviderAuthResolutionError(RuntimeError):
     RuntimeErrors from run_conversation() (e.g. a closed OpenAI client) as auth failures."""
 
 
+_SESSION_TOOL_RESULT_MAX_CHARS = 8000
+
+
+def _session_tool_result_text(result: Any) -> str:
+    """A tool result as text for the opt-in ``result`` field of session SSE tool events."""
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+    if len(text) > _SESSION_TOOL_RESULT_MAX_CHARS:
+        text = text[:_SESSION_TOOL_RESULT_MAX_CHARS] + "…[truncated]"
+    return text
+
+
+def _session_clarify_key(session_id: str, run_id: str) -> str:
+    """clarify_gateway session key of one /chat/stream run. Namespaced so it never collides
+    with a messaging platform's session key (their text intercept must not see these)."""
+    return f"api_server:{session_id}:{run_id}"
+
+
+def _clear_session_clarify(session_key: str) -> None:
+    with suppress(Exception):
+        from tools import clarify_gateway as clarify_mod
+        clarify_mod.clear_session(session_key)
+
+
 class _SessionEventQueue:
     """Ordered SSE event queue for one /api/sessions/{id}/chat/stream run. ``payload`` stamps
     session_id/run_id/seq/ts; ``enqueue`` is executor-thread safe (hops onto the owning loop)."""
@@ -1548,6 +1573,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             ("POST", "/api/sessions/{session_id}/chat", self._handle_session_chat),
             ("POST", "/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream),
             ("POST", "/api/sessions/{session_id}/model", self._handle_session_model_lock),
+            ("POST", "/api/sessions/{session_id}/clarify/{clarify_id}", self._handle_session_clarify),
             ("POST", "/v1/chat/completions", self._handle_chat_completions),
             ("POST", "/v1/responses", self._handle_responses),
             ("GET", "/v1/responses/{response_id}", self._handle_get_response),
@@ -3169,11 +3195,41 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             if delta:
                 events.enqueue("assistant.delta", {"message_id": message_id, "delta": delta})
 
+        # Opt-in: tool.completed/tool.failed also carry the (truncated) tool result, so a client
+        # can render what a tool produced (a job id, an image URL) without re-reading the transcript.
+        include_tool_results = ctx["body"].get("include_tool_results") is True
+
         def _tool_progress(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs) -> None:
             if event_type == "reasoning.available":
                 events.enqueue("tool.progress", {"message_id": message_id, "tool_name": tool_name or "_thinking", "delta": preview or ""})
             elif event_type in {"tool.started", "tool.completed", "tool.failed"}:
-                events.enqueue(event_type, {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args})
+                payload = {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args}
+                if include_tool_results and event_type != "tool.started" and kwargs.get("result") is not None:
+                    payload["result"] = _session_tool_result_text(kwargs["result"])
+                    payload["is_error"] = bool(kwargs.get("is_error"))
+                events.enqueue(event_type, payload)
+
+        clarify_session_key = _session_clarify_key(session_id, run_id)
+
+        def _clarify(question: str, choices=None, multi_select: bool = False) -> str:
+            """clarify_tool's synchronous contract over SSE: emit ``clarify`` and block the agent
+            thread until POST /api/sessions/{id}/clarify/{clarify_id} answers or the timeout."""
+            from tools import clarify_gateway as clarify_mod
+            clarify_id = uuid.uuid4().hex[:10]
+            choices = list(choices) if choices else None
+            clarify_mod.register(
+                clarify_id=clarify_id, session_key=clarify_session_key, question=question,
+                choices=choices, multi_select=bool(multi_select))
+            events.enqueue("clarify", {
+                "message_id": message_id, "clarify_id": clarify_id, "question": question,
+                "choices": choices or [], "multi_select": bool(multi_select and choices)})
+            self._set_run_status(run_id, "waiting_for_clarify", last_event="clarify")
+            timeout = clarify_mod.get_clarify_timeout()
+            response = clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
+            self._set_run_status(run_id, "running", last_event="clarify.resolved")
+            if response is None or response == "":
+                return f"[user did not respond within {int(timeout / 60)}m]"
+            return response
 
         async def _run_and_signal() -> None:
             try:
@@ -3185,7 +3241,8 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 history = await self._conversation_history_for_session(session_id)
                 result, usage = await self._run_agent(
                     conversation_history=history, stream_delta_callback=_delta,
-                    tool_progress_callback=_tool_progress, active_run_id=run_id, **ctx["run_kwargs"])
+                    tool_progress_callback=_tool_progress, clarify_callback=_clarify,
+                    active_run_id=run_id, **ctx["run_kwargs"])
                 is_dict = isinstance(result, dict)
                 final_response = _resolve_media_to_data_urls(result.get("final_response", "") if is_dict else "")
                 effective_session_id = result.get("session_id", session_id) if is_dict else session_id
@@ -3243,10 +3300,13 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 name, payload = item
                 await response.write(_sse_frame(payload, event=name, ensure_ascii=False))
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
+            # A pending clarify would pin the agent thread until its timeout: nobody can answer it now.
+            _clear_session_clarify(clarify_session_key)
             await self._drain_session_stream_task_on_disconnect(
                 run_id, task, interrupt_message="SSE client disconnected", shield_wait=False)
             logger.info("Session SSE client disconnected; interrupted live run %s", run_id)
         except asyncio.CancelledError:
+            _clear_session_clarify(clarify_session_key)
             await self._drain_session_stream_task_on_disconnect(
                 run_id, task, interrupt_message="SSE task cancelled", shield_wait=True)
             logger.info("Session SSE task cancelled; drained live run %s", run_id)
@@ -3254,6 +3314,34 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         except Exception as exc:
             logger.debug("[api_server] session SSE stream error: %s", exc)
         return response
+
+    @_require_auth
+    async def _handle_session_clarify(self, request: "web.Request") -> "web.Response":
+        """POST /api/sessions/{session_id}/clarify/{clarify_id} — answer a ``clarify`` event of a
+        live /chat/stream run. Body ``{"response": "<choice text or free answer>"}``; a
+        multi-select answer may be a list of strings (sent to the agent as JSON)."""
+        session_id = request.match_info["session_id"]
+        clarify_id = request.match_info["clarify_id"]
+        _, err = await self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        answer = body.get("response")
+        if isinstance(answer, list) and all(isinstance(a, str) for a in answer):
+            answer = json.dumps(answer, ensure_ascii=False)
+        if not isinstance(answer, str) or not answer.strip():
+            return _error_response("response must be a non-empty string", 400, code="invalid_clarify_response")
+        from tools import clarify_gateway as clarify_mod
+        with clarify_mod._lock:
+            entry = clarify_mod._entries.get(clarify_id)
+            owned = entry is not None and entry.session_key.startswith(_session_clarify_key(session_id, ""))
+        if not owned:
+            return _error_response("No pending clarify with that id in this session", 404, code="clarify_not_found")
+        if not clarify_mod.resolve_gateway_clarify(clarify_id, answer.strip()):
+            return _error_response("Clarify already answered or expired", 409, code="clarify_not_pending")
+        return web.json_response({"ok": True, "session_id": session_id, "clarify_id": clarify_id})
 
     async def _drain_session_stream_task_on_disconnect(
         self, run_id: str, task: "asyncio.Task", *, interrupt_message: str, shield_wait: bool
@@ -3679,7 +3767,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         requested_runtime: Optional[Dict[str, Any]] = None, route_source: str = "global",
         confirmed_runtime_lock: bool = False, bind_declared_conversation: bool = False,
         session_history_delivery: str = "", turn_author: Optional[Dict[str, Any]] = None,
-        relay_metadata: Optional[Dict[str, Any]] = None) -> tuple:
+        relay_metadata: Optional[Dict[str, Any]] = None, clarify_callback=None) -> tuple:
         """Create an agent and run one turn in a thread executor -> ``(result, usage)``.
         ``agent_ref[0]`` receives the agent so SSE writers can interrupt it; ``active_run_id``
         registers it in ``_active_run_agents``. Under a confirmed model lock the actual
@@ -3712,6 +3800,9 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                         gateway_session_key=gateway_session_key, requested_model=requested_model,
                         requested_provider=requested_provider, model_options=model_options, route=route,
                         session_model=session_model, confirmed_runtime_lock=confirmed_runtime_lock)
+                    if clarify_callback is not None:
+                        # Without it clarify_tool answers "not available in this execution context".
+                        agent.clarify_callback = clarify_callback
                     if agent_ref is not None:
                         agent_ref[0] = agent
                     if active_run_id:
