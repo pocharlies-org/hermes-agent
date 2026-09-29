@@ -31,9 +31,15 @@ def _probe_gateway_health() -> tuple[bool, dict | None]:
     if not _GATEWAY_HEALTH_URL:
         return False, None
     base = re.sub(r"/health(/detailed)?$", "", _GATEWAY_HEALTH_URL.rstrip("/"))
+    # /health/detailed is Bearer-gated (api_server ``_require_auth``). The dashboard shares the
+    # gateway's HERMES_HOME, so its .env carries the same API_SERVER_KEY: without it every probe
+    # was a 401 (plus an "API server rejected invalid API key" warning) before the /health fallback.
+    from hermes_cli.config import get_env_value_prefer_dotenv
+    api_key = (get_env_value_prefer_dotenv("API_SERVER_KEY") or "").strip()
     for path in (f"{base}/health/detailed", f"{base}/health"):
         try:
-            req = urllib.request.Request(path, method="GET")
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key and path.endswith("/detailed") else {}
+            req = urllib.request.Request(path, method="GET", headers=headers)
             with urllib.request.urlopen(req, timeout=_GATEWAY_HEALTH_TIMEOUT) as resp:
                 if resp.status == 200:
                     return True, json.loads(resp.read())
