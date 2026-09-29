@@ -3191,7 +3191,39 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         self._set_run_status(
             run_id, "queued", session_id=session_id, model=ctx["body"].get("model", self._model_name))
 
+        def _reasoning(text: str) -> None:
+            _emit_runtime(agent_holder[0])
+            if text:
+                events.enqueue("reasoning.delta", {"message_id": message_id, "delta": text})
+
+        runtime_seen: Dict[str, str] = {}
+        agent_holder: list = [None]
+
+        def _emit_runtime(agent: Any) -> None:
+            """``runtime`` event when the provider/model the turn runs on is known or changes (fallback)."""
+            if agent is None:
+                return
+            base = getattr(agent, "_hermes_api_runtime", None) or {}
+            now = {"provider": str(getattr(agent, "provider", "") or base.get("provider") or ""),
+                   "model": str(getattr(agent, "model", "") or base.get("model") or ""),
+                   "route_source": str(base.get("route_source") or "global"),
+                   "fallback": bool(getattr(agent, "_fallback_activated", False))}
+            if now != runtime_seen:
+                runtime_seen.clear()
+                runtime_seen.update(now)
+                events.enqueue("runtime", {"message_id": message_id, **now})
+
+        def _runtime_ready(agent: Any) -> None:
+            agent_holder[0] = agent
+            _emit_runtime(agent)
+
+        def _status(kind: str, message: str = "", **_kw: Any) -> None:
+            if message:
+                events.enqueue("status", {"message_id": message_id, "kind": str(kind or ""), "message": str(message)})
+            _emit_runtime(agent_holder[0])
+
         def _delta(delta: str) -> None:
+            _emit_runtime(agent_holder[0])
             if delta:
                 events.enqueue("assistant.delta", {"message_id": message_id, "delta": delta})
 
@@ -3200,6 +3232,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         include_tool_results = ctx["body"].get("include_tool_results") is True
 
         def _tool_progress(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs) -> None:
+            _emit_runtime(agent_holder[0])
             if event_type == "reasoning.available":
                 events.enqueue("tool.progress", {"message_id": message_id, "tool_name": tool_name or "_thinking", "delta": preview or ""})
             elif event_type in {"tool.started", "tool.completed", "tool.failed"}:
@@ -3242,6 +3275,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 result, usage = await self._run_agent(
                     conversation_history=history, stream_delta_callback=_delta,
                     tool_progress_callback=_tool_progress, clarify_callback=_clarify,
+                    reasoning_callback=_reasoning, status_callback=_status, runtime_callback=_runtime_ready,
                     active_run_id=run_id, **ctx["run_kwargs"])
                 is_dict = isinstance(result, dict)
                 final_response = _resolve_media_to_data_urls(result.get("final_response", "") if is_dict else "")
@@ -3767,7 +3801,8 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         requested_runtime: Optional[Dict[str, Any]] = None, route_source: str = "global",
         confirmed_runtime_lock: bool = False, bind_declared_conversation: bool = False,
         session_history_delivery: str = "", turn_author: Optional[Dict[str, Any]] = None,
-        relay_metadata: Optional[Dict[str, Any]] = None, clarify_callback=None) -> tuple:
+        relay_metadata: Optional[Dict[str, Any]] = None, clarify_callback=None,
+        reasoning_callback=None, status_callback=None, runtime_callback=None) -> tuple:
         """Create an agent and run one turn in a thread executor -> ``(result, usage)``.
         ``agent_ref[0]`` receives the agent so SSE writers can interrupt it; ``active_run_id``
         registers it in ``_active_run_agents``. Under a confirmed model lock the actual
@@ -3803,6 +3838,18 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                     if clarify_callback is not None:
                         # Without it clarify_tool answers "not available in this execution context".
                         agent.clarify_callback = clarify_callback
+                    # Session SSE only: the model's reasoning as it streams, lifecycle/fallback notices, and
+                    # the runtime (provider/model) the turn actually starts on — a web client can show what
+                    # the agent is doing and on which model instead of a silent spinner.
+                    if reasoning_callback is not None:
+                        agent.reasoning_callback = reasoning_callback
+                    if status_callback is not None:
+                        agent.status_callback = status_callback
+                    if runtime_callback is not None:
+                        try:
+                            runtime_callback(agent)
+                        except Exception:  # noqa: BLE001 - display-only
+                            logger.debug("[api_server] runtime_callback failed", exc_info=True)
                     if agent_ref is not None:
                         agent_ref[0] = agent
                     if active_run_id:

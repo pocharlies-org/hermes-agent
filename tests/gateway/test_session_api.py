@@ -1075,3 +1075,42 @@ async def test_session_chat_stream_tool_results_are_opt_in(adapter, session_db):
     assert "result" not in plain_done
     assert rich_done["result"] == '{"id": "cr-1", "status": "queued"}'
     assert rich_done["is_error"] is False
+
+
+# ---------------------------------------------------------------------------
+# /chat/stream: reasoning deltas, status notices and the runtime (provider/model, fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_reasoning_status_and_runtime(adapter, session_db):
+    """The web sees the reasoning as it streams, lifecycle notices and which model runs (and a fallback)."""
+    from types import SimpleNamespace
+
+    session_id = session_db.create_session("reasoning-session", "api_server")
+
+    async def fake_run(**kwargs):
+        agent = SimpleNamespace(provider="custom", model="qwen38-flash-next", _fallback_activated=False,
+                                _hermes_api_runtime={"route_source": "global"})
+        kwargs["runtime_callback"](agent)
+        kwargs["reasoning_callback"]("Pienso")
+        kwargs["reasoning_callback"](" un poco.")
+        agent.provider, agent.model, agent._fallback_activated = "litellm-alibaba", "alibaba-q38-flash", True
+        kwargs["status_callback"]("lifecycle", "Primario caído: paso al fallback")
+        kwargs["stream_delta_callback"]("Hola")
+        return {"final_response": "Hola", "session_id": session_id, "messages": []}, {}
+
+    app = _create_session_app(adapter)
+    with patch.object(adapter, "_run_agent", side_effect=fake_run):
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(f"/api/sessions/{session_id}/chat/stream", json={"message": "hola"})
+            assert resp.status == 200
+            events = _sse_events(await asyncio.wait_for(resp.text(), timeout=5))
+
+    names = [n for n, _ in events]
+    runtimes = [d for n, d in events if n == "runtime"]
+    assert [(r["provider"], r["model"], r["fallback"]) for r in runtimes] == [
+        ("custom", "qwen38-flash-next", False), ("litellm-alibaba", "alibaba-q38-flash", True)]
+    assert "".join(d["delta"] for n, d in events if n == "reasoning.delta") == "Pienso un poco."
+    assert [d["message"] for n, d in events if n == "status"] == ["Primario caído: paso al fallback"]
+    assert names.index("runtime") < names.index("reasoning.delta") < names.index("assistant.delta") < names.index("done")
