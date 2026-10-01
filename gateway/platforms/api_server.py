@@ -2801,14 +2801,24 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         title_filter = (request.query.get("title") or "").strip() or None
         include_hidden = bool(title_filter) and _coerce_request_bool(
             request.query.get("include_hidden"), default=False)
+        # archived=exclude|only|include — the same switch the web dashboard's GET /api/sessions has
+        # (web_routers/sessions.py), so an api_server client can list archived sessions and unarchive
+        # them with the PATCH it already has. Default unchanged: archived rows stay out.
+        archived = (request.query.get("archived") or "exclude").strip().lower()
+        if archived not in ("exclude", "only", "include"):
+            return _error_response("archived must be one of: exclude, only, include", 400,
+                                   code="invalid_archived")
 
         async def _list() -> list:
             # include_pinned back-fills pins past the recency window; search_query pushes the
             # title needle into SQL (substring) so a hidden/old row is found, exact match below.
+            # An archived-only page does not back-fill pins: they are live rows.
             rows = await asyncio.to_thread(
                 db.list_sessions_rich, source=source, limit=limit, offset=offset,
-                include_children=include_children, order_by_last_active=True, include_pinned=True,
-                search_query=title_filter, include_hidden=include_hidden)
+                include_children=include_children, order_by_last_active=True,
+                include_pinned=archived != "only", search_query=title_filter,
+                include_hidden=include_hidden, include_archived=archived == "include",
+                archived_only=archived == "only")
             if title_filter:
                 rows = [s for s in rows if (s.get("title") or "").strip() == title_filter]
             return rows
