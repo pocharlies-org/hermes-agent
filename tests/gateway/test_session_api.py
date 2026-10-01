@@ -1114,3 +1114,27 @@ async def test_session_chat_stream_reasoning_status_and_runtime(adapter, session
     assert "".join(d["delta"] for n, d in events if n == "reasoning.delta") == "Pienso un poco."
     assert [d["message"] for n, d in events if n == "status"] == ["Primario caído: paso al fallback"]
     assert names.index("runtime") < names.index("reasoning.delta") < names.index("assistant.delta") < names.index("done")
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_archived_switch(adapter, session_db):
+    """GET /api/sessions?archived=exclude|only|include: archived rows stay out by default, are the
+    only ones with `only`, and come with the rest with `include`; anything else is a 400."""
+    live = session_db.create_session("live-one", "api_server")
+    gone = session_db.create_session("archived-one", "webhook")
+    session_db.set_session_archived(gone, True)
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        async def ids(query: str) -> set:
+            resp = await cli.get("/api/sessions" + query)
+            assert resp.status == 200
+            return {row["id"] for row in (await resp.json())["data"]}
+
+        assert await ids("") == {live}
+        assert await ids("?archived=exclude") == {live}
+        assert await ids("?archived=only") == {gone}
+        assert await ids("?archived=include") == {live, gone}
+        bad = await cli.get("/api/sessions?archived=yes")
+        assert bad.status == 400
+
