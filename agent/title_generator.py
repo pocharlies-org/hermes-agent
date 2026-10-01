@@ -10,6 +10,7 @@ import logging
 import re
 import threading
 from contextlib import suppress
+from contextvars import copy_context
 from typing import Any, Callable, Optional
 
 from agent.auxiliary_client import call_llm
@@ -488,9 +489,12 @@ def maybe_auto_title(
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
         return
     apply_instant_title(session_db, session_id, user_message, title_callback)
+    # copy_context so the thread inherits the caller's ContextVars (hermes home, routing class);
+    # a bare Thread target drops them and the call leaves to LiteLLM without the company class.
+    # Precedent: hermes_cli/inventory.py pricing prewarm.
     threading.Thread(
-        target=auto_title_session,
-        args=(session_db, session_id, user_message),
+        target=copy_context().run,
+        args=(auto_title_session, session_db, session_id, user_message),
         kwargs=dict(failure_callback=failure_callback, main_runtime=main_runtime, title_callback=title_callback, runtime_validator=runtime_validator),
         daemon=True,
         name="auto-title",

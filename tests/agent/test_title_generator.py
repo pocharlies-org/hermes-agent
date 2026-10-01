@@ -356,6 +356,37 @@ class TestMaybeAutoTitle:
                 runtime_validator=None,
             )
 
+    def test_title_thread_inherits_caller_contextvars(self, tmp_path):
+        """SC-1495: the auto-title thread must see the caller's context-local hermes-home
+        override — without copy_context the call leaves to LiteLLM without the company class."""
+        import threading
+        from hermes_constants import (
+            _HERMES_HOME_OVERRIDE,
+            reset_hermes_home_override,
+            set_hermes_home_override,
+        )
+
+        db = MagicMock()
+        db.get_session_title.return_value = None
+        history = [{"role": "user", "content": "hello"}]
+        home = str(tmp_path / "profile-home")
+        token = set_hermes_home_override(home)
+        try:
+            seen = []
+            ran = threading.Event()
+
+            def fake_auto_title_session(*args, **kwargs):
+                seen.append(_HERMES_HOME_OVERRIDE.get())
+                ran.set()
+
+            with patch("agent.title_generator.auto_title_session", fake_auto_title_session):
+                maybe_auto_title(db, "sess-1", "hello", history)
+                # Event-based wait: sleep-sync flaked on loaded runners (see test_fires_on_first_exchange).
+                assert ran.wait(timeout=5), "auto_title thread never ran"
+            assert seen == [home], "title thread lost the caller's _HERMES_HOME_OVERRIDE"
+        finally:
+            reset_hermes_home_override(token)
+
     def test_writes_instant_title_before_the_model_runs(self, tmp_path):
         """The derived title lands synchronously — no LLM, no waiting."""
         db = SessionDB(tmp_path / "state.db")
