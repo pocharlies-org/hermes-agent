@@ -268,6 +268,12 @@ class SessionLifecycleMixin:
                         alive[name] = True
                 if not alive[name]:
                     removed_keys.append(key)
+            if alive and not any(alive.values()):
+                # No profile of the index exists: the profiles dir is missing or unmounted, not
+                # retired. Pruning now would drop the whole routing index; keep it.
+                logger.warning("SessionStore: none of %d routed profiles exists; skipping the prune "
+                               "of retired profiles (profiles dir missing?)", len(alive))
+                return 0
             for key in removed_keys:
                 self._entries.pop(key, None)
             if removed_keys:

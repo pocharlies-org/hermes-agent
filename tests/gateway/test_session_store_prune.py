@@ -300,9 +300,20 @@ class TestPruneRetiredProfiles:
     def test_persists_the_pruned_index(self, tmp_path):
         store = _make_store(tmp_path)
         store._entries["agent:compania:webhook:compania:aaa"] = _entry("agent:compania:webhook:compania:aaa", 1)
+        store._entries["agent:cto:api_server:dm:b"] = _entry("agent:cto:api_server:dm:b", 1)
+        alive = lambda name: name == "cto"
         with patch.object(store, "_save") as save:
-            assert store.prune_entries_for_missing_profiles(lambda name: False) == 1
+            assert store.prune_entries_for_missing_profiles(alive) == 1
             save.assert_called_once()
         with patch.object(store, "_save") as save:
-            assert store.prune_entries_for_missing_profiles(lambda name: False) == 0
+            assert store.prune_entries_for_missing_profiles(alive) == 0
             save.assert_not_called()
+
+    def test_no_prune_when_no_profile_exists(self, tmp_path):
+        """Profiles dir missing/unmounted at startup: every lookup says «missing». Pruning then would
+        drop the whole index, so nothing is pruned."""
+        store = _make_store(tmp_path)
+        for k in ("agent:cto:api_server:dm:a", "agent:analista:api_server:dm:b", "agent:compania:webhook:x:c"):
+            store._entries[k] = _entry(k, 1)
+        assert store.prune_entries_for_missing_profiles(lambda name: False) == 0
+        assert len(store._entries) == 3
