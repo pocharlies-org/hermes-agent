@@ -43,7 +43,24 @@ _BLOCKED_DOMAINS = frozenset({
     "rest_command",     # HTTP requests from HA server (SSRF vector)
     "alarm_control_panel",  # arm/disarm the house alarm: physical security, never from a prompt
     "lock",             # open a door lock: physical security, never from a prompt
+    "cover",            # garage door, gates, blinds: physical access
+    "homeassistant",    # generic turn_on/toggle reaches any domain (lock.*, cover.*); restart/stop/reload HA
 })
+
+
+def _blocked_entity(entity_ids) -> Optional[str]:
+    """First entity_id whose domain is blocked (string, comma list or list), else None.
+
+    The domain check above only looks at the SERVICE domain: ``light.turn_on`` with
+    ``entity_id: lock.front_door`` must not reach Home Assistant either."""
+    if isinstance(entity_ids, str):
+        entity_ids = entity_ids.split(",")
+    if not isinstance(entity_ids, (list, tuple)):
+        return None
+    for entity in entity_ids:
+        if isinstance(entity, str) and entity.strip().split(".", 1)[0] in _BLOCKED_DOMAINS:
+            return entity.strip()
+    return None
 
 
 def _get_headers(token: str = "") -> Dict[str, str]:
@@ -193,6 +210,12 @@ def _handle_call_service(args: dict, **kw) -> str:
             data = json.loads(data) if data.strip() else None
         except json.JSONDecodeError as e:
             return tool_error(f"Invalid JSON string in 'data' parameter: {e}")
+    blocked = _blocked_entity(entity_id) or (
+        _blocked_entity(data.get("entity_id")) if isinstance(data, dict) else None)
+    if blocked:
+        return tool_error(
+            f"Entity '{blocked}' belongs to a blocked domain. "
+            f"Blocked domains: {', '.join(sorted(_BLOCKED_DOMAINS))}")
     return _dispatch(
         _async_call_service(domain, service, entity_id, data),
         "ha_call_service", f"Failed to call {domain}.{service}")

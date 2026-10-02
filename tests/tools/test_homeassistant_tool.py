@@ -162,9 +162,41 @@ class TestDomainBlocklist:
     def test_blocked_domains_include_hassio(self):
         assert "hassio" in _BLOCKED_DOMAINS
 
-    @pytest.mark.parametrize("domain", ["alarm_control_panel", "lock"])
+    @pytest.mark.parametrize("domain", ["alarm_control_panel", "lock", "cover", "homeassistant"])
     def test_blocked_domains_include_physical_security(self, domain):
         assert domain in _BLOCKED_DOMAINS
+
+    @pytest.mark.parametrize("entity_id", ["lock.front_door", "cover.garage_door", "alarm_control_panel.securitas"])
+    @patch("tools.homeassistant_tool._async_call_service", new_callable=AsyncMock)
+    def test_blocked_entity_param_with_safe_service_domain(self, mock_call_service, entity_id):
+        """``light.turn_on`` on a lock/cover/alarm entity is rejected before any HA call."""
+        result = json.loads(_handle_call_service({
+            "domain": "light", "service": "turn_on", "entity_id": entity_id}))
+        assert "error" in result and "blocked" in result["error"].lower()
+        mock_call_service.assert_not_called()
+
+    @pytest.mark.parametrize("data", [
+        {"entity_id": "lock.front_door"},
+        {"entity_id": ["light.salon", "cover.garage_door"]},
+        {"entity_id": "light.salon, lock.front_door"},
+        '{"entity_id": "cover.garage_door"}',
+    ])
+    @patch("tools.homeassistant_tool._async_call_service", new_callable=AsyncMock)
+    def test_blocked_entity_inside_data(self, mock_call_service, data):
+        """data.entity_id as string, comma list, list or JSON string is checked too."""
+        result = json.loads(_handle_call_service({
+            "domain": "switch", "service": "turn_on", "data": data}))
+        assert "error" in result and "blocked" in result["error"].lower()
+        mock_call_service.assert_not_called()
+
+    @patch("tools.homeassistant_tool._async_call_service", new_callable=AsyncMock)
+    def test_safe_entities_in_data_still_reach_ha(self, mock_call_service):
+        mock_call_service.return_value = {"success": True}
+        result = json.loads(_handle_call_service({
+            "domain": "notify", "service": "alexa_media_echo_show",
+            "data": {"message": "hola", "data": {"type": "announce"}}}))
+        assert result["result"]["success"] is True
+        mock_call_service.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
