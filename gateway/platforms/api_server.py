@@ -1075,6 +1075,12 @@ def _session_clarify_key(session_id: str, run_id: str) -> str:
     return f"api_server:{session_id}:{run_id}"
 
 
+def _sse_disconnect_interrupts() -> bool:
+    """Upstream behaviour (interrupt the live run when the session SSE client goes away) only when
+    ``API_SERVER_SSE_DISCONNECT_INTERRUPTS`` is truthy. Default: the run continues detached."""
+    return os.environ.get("API_SERVER_SSE_DISCONNECT_INTERRUPTS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _clear_session_clarify(session_key: str) -> None:
     with suppress(Exception):
         from tools import clarify_gateway as clarify_mod
@@ -3190,6 +3196,12 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             requested_runtime=runtime_request.get("requested"),
             route_source=runtime_request.get("route_source") or "global",
             model_lock=("accepted" if ctx["lock_active"] else ""))
+        # One live turn per session. A turn now outlives its SSE client (see the disconnect branch
+        # below), so a second POST to a busy session — a relay that restarted, a client retry —
+        # would start a second agent on the same transcript. Checked and claimed (status "queued")
+        # with no await in between.
+        if self._session_run_in_flight(session_id):
+            return _error_response("session has a turn in flight", 409, code="session_busy")
         message_id = f"msg_{uuid.uuid4().hex}"
         run_id = f"run_{uuid.uuid4().hex}"
         events = _SessionEventQueue(session_id, run_id)
@@ -3346,9 +3358,18 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
             # A pending clarify would pin the agent thread until its timeout: nobody can answer it now.
             _clear_session_clarify(clarify_session_key)
-            await self._drain_session_stream_task_on_disconnect(
-                run_id, task, interrupt_message="SSE client disconnected", shield_wait=False)
-            logger.info("Session SSE client disconnected; interrupted live run %s", run_id)
+            if _sse_disconnect_interrupts():
+                await self._drain_session_stream_task_on_disconnect(
+                    run_id, task, interrupt_message="SSE client disconnected", shield_wait=False)
+                logger.info("Session SSE client disconnected; interrupted live run %s", run_id)
+            else:
+                # The turn belongs to the session, not to the socket: a relay that restarts (a
+                # dashboard rollout) or a client that walks away must not kill a live run. It keeps
+                # running as a tracked background task, persists to the session as usual, and its
+                # remaining events go to an unbounded queue nobody reads. While it lives the session
+                # answers 409 session_busy. Server shutdown waits for it through the in-flight agent
+                # count (_inflight_agent_runs -> active_agent_work_count), not through this handler.
+                logger.info("Session SSE client disconnected; live run %s continues detached", run_id)
         except asyncio.CancelledError:
             _clear_session_clarify(clarify_session_key)
             await self._drain_session_stream_task_on_disconnect(
@@ -3386,6 +3407,14 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         if not clarify_mod.resolve_gateway_clarify(clarify_id, answer.strip()):
             return _error_response("Clarify already answered or expired", 409, code="clarify_not_pending")
         return web.json_response({"ok": True, "session_id": session_id, "clarify_id": clarify_id})
+
+    _SESSION_RUN_LIVE_STATUSES = frozenset({"queued", "running", "waiting_for_clarify", "waiting_for_approval", "stopping"})
+
+    def _session_run_in_flight(self, session_id: str) -> bool:
+        """True while a run of ``session_id`` is not terminal (in-memory, like _run_statuses)."""
+        return any(
+            st.get("session_id") == session_id and st.get("status") in self._SESSION_RUN_LIVE_STATUSES
+            for st in list(self._run_statuses.values()))
 
     async def _drain_session_stream_task_on_disconnect(
         self, run_id: str, task: "asyncio.Task", *, interrupt_message: str, shield_wait: bool

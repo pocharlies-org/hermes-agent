@@ -1,6 +1,7 @@
 """Focused tests for API server session-control endpoints."""
 
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -227,9 +228,11 @@ async def test_run_agent_registers_active_run_id_for_steering(adapter, monkeypat
 
 @pytest.mark.asyncio
 async def test_session_chat_stream_disconnect_keeps_control_refs_until_executor_finishes(
-    adapter, session_db
+    adapter, session_db, monkeypatch
 ):
-    """Disconnects must interrupt the live run without dropping its control refs early."""
+    """With API_SERVER_SSE_DISCONNECT_INTERRUPTS (upstream behaviour), a disconnect interrupts the
+    live run without dropping its control refs early."""
+    monkeypatch.setenv("API_SERVER_SSE_DISCONNECT_INTERRUPTS", "1")
     session_id = session_db.create_session("disconnect-stream-session", "api_server")
     run_started = threading.Event()
     interrupt_called = threading.Event()
@@ -315,6 +318,92 @@ async def test_session_chat_stream_disconnect_keeps_control_refs_until_executor_
         await handler_task
 
     assert run_id not in adapter._active_run_agents
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_disconnect_lets_the_run_finish_detached(adapter, session_db, monkeypatch):
+    """Default: the turn belongs to the session, not to the socket. A client that goes away (a relay
+    restarting on a rollout) must not interrupt the live run: the handler returns, the run finishes
+    on its own and releases its control refs."""
+    monkeypatch.delenv("API_SERVER_SSE_DISCONNECT_INTERRUPTS", raising=False)
+    session_id = session_db.create_session("detached-stream-session", "api_server")
+    run_started = threading.Event()
+    interrupt_called = threading.Event()
+    allow_finish = threading.Event()
+    finished = threading.Event()
+    write_calls = {"count": 0}
+
+    class FakeAgent:
+        session_prompt_tokens = 0
+        session_completion_tokens = 0
+        session_total_tokens = 0
+
+        def __init__(self, stream_delta_callback):
+            self._stream_delta_callback = stream_delta_callback
+            self.session_id = session_id
+
+        def interrupt(self, _message=None):
+            interrupt_called.set()
+
+        def run_conversation(self, user_message, conversation_history, task_id):
+            del user_message, conversation_history, task_id
+            run_started.set()
+            self._stream_delta_callback("hello")
+            allow_finish.wait(timeout=5)
+            self._stream_delta_callback("after the client left")
+            finished.set()
+            return {"final_response": "done", "session_id": session_id}
+
+    class DisconnectingStreamResponse:
+        async def prepare(self, request):
+            del request
+
+        async def write(self, payload):
+            del payload
+            write_calls["count"] += 1
+            if write_calls["count"] >= 3:
+                raise ConnectionResetError("simulated client disconnect")
+
+    request = MagicMock()
+    request.headers = {}
+    request.match_info = {"session_id": session_id}
+
+    with patch.object(adapter, "_get_existing_session_or_404", return_value=({"id": session_id}, None)), \
+            patch.object(adapter, "_read_json_body", return_value=({"message": "stream please"}, None)), \
+            patch.object(adapter, "_create_agent", side_effect=lambda **kw: FakeAgent(kw["stream_delta_callback"])), \
+            patch("gateway.platforms.api_server.web.StreamResponse", return_value=DisconnectingStreamResponse()):
+        handler_task = asyncio.create_task(adapter._handle_session_chat_stream(request))
+        for _ in range(60):
+            if run_started.is_set():
+                break
+            await asyncio.sleep(0.05)
+        assert run_started.is_set()
+        run_id = next(iter(adapter._run_statuses))
+
+        # The handler gives up on the socket and returns while the run is still alive.
+        await asyncio.wait_for(handler_task, timeout=5)
+        assert not interrupt_called.is_set()
+        assert run_id in adapter._active_run_agents
+        assert not finished.is_set()
+
+        # While the detached run lives, the session is busy: a second turn gets 409 session_busy.
+        assert adapter._session_run_in_flight(session_id)
+        busy = await adapter._handle_session_chat_stream(request)
+        assert busy.status == 409
+        assert json.loads(busy.body)["error"]["code"] == "session_busy"
+        assert len([r for r in adapter._run_statuses.values() if r.get("session_id") == session_id]) == 1
+
+        allow_finish.set()
+        for _ in range(100):
+            if run_id not in adapter._active_run_agents and adapter._run_statuses[run_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0.05)
+        assert not adapter._session_run_in_flight(session_id)
+
+    assert finished.is_set()
+    assert not interrupt_called.is_set()
+    assert run_id not in adapter._active_run_agents
+    assert adapter._run_statuses[run_id]["status"] == "completed"
 
 
 @pytest.mark.asyncio
