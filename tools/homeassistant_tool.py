@@ -41,6 +41,8 @@ _BLOCKED_DOMAINS = frozenset({
     "pyscript",         # scripting integration with broader access
     "hassio",           # addon control, host shutdown/reboot, stdin to containers
     "rest_command",     # HTTP requests from HA server (SSRF vector)
+    "alarm_control_panel",  # arm/disarm the house alarm: physical security, never from a prompt
+    "lock",             # open a door lock: physical security, never from a prompt
 })
 
 

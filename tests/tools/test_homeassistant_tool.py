@@ -162,6 +162,10 @@ class TestDomainBlocklist:
     def test_blocked_domains_include_hassio(self):
         assert "hassio" in _BLOCKED_DOMAINS
 
+    @pytest.mark.parametrize("domain", ["alarm_control_panel", "lock"])
+    def test_blocked_domains_include_physical_security(self, domain):
+        assert domain in _BLOCKED_DOMAINS
+
 
 # ---------------------------------------------------------------------------
 # Security: entity_id validation
