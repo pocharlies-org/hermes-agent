@@ -58,7 +58,8 @@ def _blocked_entity(entity_ids) -> Optional[str]:
     if not isinstance(entity_ids, (list, tuple)):
         return None
     for entity in entity_ids:
-        if isinstance(entity, str) and entity.strip().split(".", 1)[0] in _BLOCKED_DOMAINS:
+        # HA lower-cases entity_ids: "LOCK.front_door" is lock.front_door.
+        if isinstance(entity, str) and entity.strip().split(".", 1)[0].lower() in _BLOCKED_DOMAINS:
             return entity.strip()
     return None
 

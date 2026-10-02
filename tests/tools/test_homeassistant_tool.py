@@ -179,6 +179,7 @@ class TestDomainBlocklist:
         {"entity_id": "lock.front_door"},
         {"entity_id": ["light.salon", "cover.garage_door"]},
         {"entity_id": "light.salon, lock.front_door"},
+        {"entity_id": "LOCK.front_door"},
         '{"entity_id": "cover.garage_door"}',
     ])
     @patch("tools.homeassistant_tool._async_call_service", new_callable=AsyncMock)
