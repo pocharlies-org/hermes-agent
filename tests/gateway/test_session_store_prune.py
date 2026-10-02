@@ -258,3 +258,62 @@ class TestReadmeSentinel:
         # The note points users at the real store and command.
         assert "state.db" in raw["_README"]
         assert "hermes sessions list" in raw["_README"]
+
+
+class TestPruneRetiredProfiles:
+    """Entries of a profile that no longer exists are dropped (the heartbeat poll walks the whole
+    index every few seconds and each orphan resolves, warns and re-reads config)."""
+
+    def test_drops_only_entries_of_missing_profiles(self, tmp_path):
+        store = _make_store(tmp_path)
+        keys = ["agent:compania:webhook:compania:aaa", "agent:compania:webhook:compania:bbb",
+                "agent:ops-sre:webhook:ops-sre:ccc", "agent:cto:api_server:dm:epica-sc-1",
+                "agent:main:telegram:dm:42", "agent:default:telegram:dm:43", "legacy-key"]
+        for k in keys:
+            store._entries[k] = _entry(k, 1)
+        seen = []
+
+        def alive(name):
+            seen.append(name)
+            return name == "cto"
+
+        assert store.prune_entries_for_missing_profiles(alive) == 3
+        assert sorted(store._entries) == sorted(["agent:cto:api_server:dm:epica-sc-1", "agent:main:telegram:dm:42",
+                                                 "agent:default:telegram:dm:43", "legacy-key"])
+        assert sorted(seen) == ["compania", "cto", "ops-sre"]   # one lookup per profile name
+
+    def test_keeps_suspended_active_and_unknown(self, tmp_path):
+        store = _make_store(tmp_path, has_active_processes_fn=lambda key: key.endswith(":busy"))
+        store._entries["agent:compania:webhook:compania:paused"] = _entry(
+            "agent:compania:webhook:compania:paused", 1, suspended=True)
+        store._entries["agent:compania:webhook:compania:busy"] = _entry("agent:compania:webhook:compania:busy", 1)
+        store._entries["agent:flaky:webhook:flaky:x"] = _entry("agent:flaky:webhook:flaky:x", 1)
+
+        def alive(name):
+            if name == "flaky":
+                raise OSError("profiles dir unreadable")
+            return False
+
+        assert store.prune_entries_for_missing_profiles(alive) == 0
+        assert len(store._entries) == 3
+
+    def test_persists_the_pruned_index(self, tmp_path):
+        store = _make_store(tmp_path)
+        store._entries["agent:compania:webhook:compania:aaa"] = _entry("agent:compania:webhook:compania:aaa", 1)
+        store._entries["agent:cto:api_server:dm:b"] = _entry("agent:cto:api_server:dm:b", 1)
+        alive = lambda name: name == "cto"
+        with patch.object(store, "_save") as save:
+            assert store.prune_entries_for_missing_profiles(alive) == 1
+            save.assert_called_once()
+        with patch.object(store, "_save") as save:
+            assert store.prune_entries_for_missing_profiles(alive) == 0
+            save.assert_not_called()
+
+    def test_no_prune_when_no_profile_exists(self, tmp_path):
+        """Profiles dir missing/unmounted at startup: every lookup says «missing». Pruning then would
+        drop the whole index, so nothing is pruned."""
+        store = _make_store(tmp_path)
+        for k in ("agent:cto:api_server:dm:a", "agent:analista:api_server:dm:b", "agent:compania:webhook:x:c"):
+            store._entries[k] = _entry(k, 1)
+        assert store.prune_entries_for_missing_profiles(lambda name: False) == 0
+        assert len(store._entries) == 3

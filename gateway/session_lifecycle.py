@@ -242,6 +242,46 @@ class SessionLifecycleMixin:
                         len(removed_keys), max_age_days)
         return len(removed_keys)
 
+    def prune_entries_for_missing_profiles(self, profile_alive) -> int:
+        """Drop routing entries whose ``agent:<profile>:`` key names a profile that no longer
+        exists (a retired profile). Every heartbeat poll walks the whole index and each orphan
+        resolves its profile, warns and re-reads config: one retired profile with hundreds of
+        webhook sessions burned most of a core. ``main``/``default`` are never pruned; suspended
+        entries and entries with active background processes are kept, and a ``profile_alive``
+        error keeps the entry. Only the key -> session_id mapping is dropped (the transcript
+        stays). Returns the number dropped."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            removed_keys = []
+            alive: dict = {}
+            for key, entry in list(self._entries.items()):
+                parts = key.split(":")
+                if len(parts) < 3 or parts[0] != "agent" or parts[1] in ("main", "default"):
+                    continue
+                if entry.suspended or self._has_active_processes_safe(entry.session_key, context="prune"):
+                    continue
+                name = parts[1]
+                if name not in alive:
+                    try:
+                        alive[name] = bool(profile_alive(name))
+                    except Exception:
+                        alive[name] = True
+                if not alive[name]:
+                    removed_keys.append(key)
+            if alive and not any(alive.values()):
+                # No profile of the index exists: the profiles dir is missing or unmounted, not
+                # retired. Pruning now would drop the whole routing index; keep it.
+                logger.warning("SessionStore: none of %d routed profiles exists; skipping the prune "
+                               "of retired profiles (profiles dir missing?)", len(alive))
+                return 0
+            for key in removed_keys:
+                self._entries.pop(key, None)
+            if removed_keys:
+                self._save()
+        if removed_keys:
+            logger.info("SessionStore pruned %d entries of profiles that no longer exist", len(removed_keys))
+        return len(removed_keys)
+
     def suspend_recently_active(self, max_age_seconds: int = 120) -> int:
         """Mark sessions active within *max_age_seconds* as ``resume_pending`` after a crash/fast
         restart (already-pending and suspended entries are skipped). Returns the number marked.

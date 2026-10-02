@@ -2535,6 +2535,8 @@ _INTERRUPT_REASON_RESET = "Session reset requested"
 _INTERRUPT_REASON_TIMEOUT = "Execution timed out (inactivity)"
 _INTERRUPT_REASON_EVICTED = "Session ended while the turn was running"
 _INTERRUPT_REASON_SSE_DISCONNECT = "SSE client disconnected"
+# Profiles already reported as missing by _resolve_profile_home_for_source (warn once each).
+_MISSING_PROFILES_WARNED: set = set()
 _INTERRUPT_REASON_GATEWAY_SHUTDOWN = "Gateway shutting down"
 _INTERRUPT_REASON_GATEWAY_RESTART = "Gateway restarting"
 
@@ -4306,7 +4308,10 @@ class GatewayRunner(
                 name = get_active_profile_name() or "default"
             profile_dir = get_profile_dir(name)
             if explicit_profile and not profile_exists(name):
-                logger.warning(
+                # Once per profile per process: a retired profile can own hundreds of routed sessions.
+                log = logger.debug if explicit_profile in _MISSING_PROFILES_WARNED else logger.warning
+                _MISSING_PROFILES_WARNED.add(explicit_profile)
+                log(
                     "Profile %r does not exist for source %s/%s (guild_id=%s), "
                     "falling back to global HERMES_HOME",
                     explicit_profile, source.platform.value, source.chat_id,
