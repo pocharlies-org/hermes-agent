@@ -1,6 +1,7 @@
 """Focused tests for API server session-control endpoints."""
 
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -385,11 +386,19 @@ async def test_session_chat_stream_disconnect_lets_the_run_finish_detached(adapt
         assert run_id in adapter._active_run_agents
         assert not finished.is_set()
 
+        # While the detached run lives, the session is busy: a second turn gets 409 session_busy.
+        assert adapter._session_run_in_flight(session_id)
+        busy = await adapter._handle_session_chat_stream(request)
+        assert busy.status == 409
+        assert json.loads(busy.body)["error"]["code"] == "session_busy"
+        assert len([r for r in adapter._run_statuses.values() if r.get("session_id") == session_id]) == 1
+
         allow_finish.set()
         for _ in range(100):
             if run_id not in adapter._active_run_agents and adapter._run_statuses[run_id]["status"] == "completed":
                 break
             await asyncio.sleep(0.05)
+        assert not adapter._session_run_in_flight(session_id)
 
     assert finished.is_set()
     assert not interrupt_called.is_set()
