@@ -1075,6 +1075,12 @@ def _session_clarify_key(session_id: str, run_id: str) -> str:
     return f"api_server:{session_id}:{run_id}"
 
 
+def _sse_disconnect_interrupts() -> bool:
+    """Upstream behaviour (interrupt the live run when the session SSE client goes away) only when
+    ``API_SERVER_SSE_DISCONNECT_INTERRUPTS`` is truthy. Default: the run continues detached."""
+    return os.environ.get("API_SERVER_SSE_DISCONNECT_INTERRUPTS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _clear_session_clarify(session_key: str) -> None:
     with suppress(Exception):
         from tools import clarify_gateway as clarify_mod
@@ -3346,9 +3352,17 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
             # A pending clarify would pin the agent thread until its timeout: nobody can answer it now.
             _clear_session_clarify(clarify_session_key)
-            await self._drain_session_stream_task_on_disconnect(
-                run_id, task, interrupt_message="SSE client disconnected", shield_wait=False)
-            logger.info("Session SSE client disconnected; interrupted live run %s", run_id)
+            if _sse_disconnect_interrupts():
+                await self._drain_session_stream_task_on_disconnect(
+                    run_id, task, interrupt_message="SSE client disconnected", shield_wait=False)
+                logger.info("Session SSE client disconnected; interrupted live run %s", run_id)
+            else:
+                # The turn belongs to the session, not to the socket: a relay that restarts (a
+                # dashboard rollout) or a client that walks away must not kill a live run. It keeps
+                # running as a tracked background task, persists to the session as usual, and its
+                # remaining events go to an unbounded queue nobody reads. Server shutdown still
+                # drains it (the CancelledError branch below and the shutdown drain).
+                logger.info("Session SSE client disconnected; live run %s continues detached", run_id)
         except asyncio.CancelledError:
             _clear_session_clarify(clarify_session_key)
             await self._drain_session_stream_task_on_disconnect(
