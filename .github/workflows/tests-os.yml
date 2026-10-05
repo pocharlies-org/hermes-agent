@@ -58,9 +58,11 @@ jobs:
       matrix:
         include:
           - name: macOS-only tests
+            # 2026-10-05 devops · fuera de pool: no existe hardware de esa plataforma en el clúster (skill ci-runners-arc, INFRA-548)
             runner: macos-latest
             marker: macos_only
           - name: Windows-only tests
+            # 2026-10-05 devops · fuera de pool: no existe hardware de esa plataforma en el clúster (skill ci-runners-arc, INFRA-548)
             runner: windows-latest-32-core
             marker: windows_only
     steps:

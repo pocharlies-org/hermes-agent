@@ -63,6 +63,7 @@ on:
         description: 'Runner label.'
         required: false
         type: string
+        # 2026-10-05 devops · fuera de pool: el E2E del instalador necesita ubuntu limpio con toolcache (skill ci-runners-arc, INFRA-548)
         default: ubuntu-latest
       timeout-minutes:
         description: 'Job timeout. A cold run installs real toolchains twice, and app-update legs add a full Electron build + launch.'
