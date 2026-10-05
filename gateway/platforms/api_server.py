@@ -1300,6 +1300,35 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             return default
         return max(0, value)
 
+    # Headroom over the run cap for everything else that uses the loop's default executor: the
+    # ``to_thread`` session-DB reads, auth verification, cron fires, other platforms' turns.
+    _EXECUTOR_HEADROOM = 64
+
+    def _ensure_default_executor_capacity(self) -> None:
+        """Size the loop's default executor for the run cap (DGX-586).
+
+        Agent turns run on it (``run_in_executor(None, …)`` in /v1/runs and ``_run_agent``) next to
+        the short ``to_thread`` session-DB reads. The stock pool is ``min(32, cpu + 4)`` — 12 threads
+        on 8 cores — so with a cap of 200 and slow turns, 12 turns in flight left ``GET
+        /api/sessions`` queued behind them for minutes and every dashboard Despacho timed out. Never
+        shrinks a pool that is already big enough. ``HERMES_EXECUTOR_WORKERS`` overrides the size.
+        """
+        try:
+            workers = int(os.getenv("HERMES_EXECUTOR_WORKERS", "0") or 0)
+        except ValueError:
+            workers = 0
+        if workers <= 0:
+            cap = self._max_concurrent_runs or 200  # 0 = uncapped: size for a busy gateway
+            workers = cap + self._EXECUTOR_HEADROOM
+        loop = asyncio.get_running_loop()
+        current = getattr(loop, "_default_executor", None)
+        if getattr(current, "_max_workers", 0) >= workers:
+            return
+        loop.set_default_executor(
+            concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hermes-exec"))
+        logger.info("[%s] default executor sized to %d workers (run cap %d)",
+                    self.name, workers, self._max_concurrent_runs)
+
     @staticmethod
     def _resolve_model_name(explicit: str) -> str:
         """Advertised /v1/models name: explicit override > active profile name > "hermes-agent"
@@ -4081,6 +4110,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 "`/platform resume api_server`.",
                 retryable=False)
             return False
+        self._ensure_default_executor_capacity()
         try:
             mws = [mw for mw in (
                 self._make_profile_prefix_middleware(), cors_middleware, body_limit_middleware,
