@@ -1,0 +1,46 @@
+name: hermes-overlay
+
+# Builds the overlay image of an `overlay/**` branch (docker/Dockerfile.overlay on top of the live
+# image) and pushes it to Harbor with the tag in docker/overlay-tag. Same path as the dashboard
+# builds: in-cluster BuildKit, Harbor LAN host, org robot. The pin in values.yaml of
+# k8s-openclaw-qwen36-pocharlies (and its ordered restart) is a separate PR there.
+on:
+  push:
+    branches: ['overlay/**']
+
+concurrency:
+  group: hermes-overlay-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  overlay:
+    runs-on: arc-k8s
+    timeout-minutes: 40
+    env:
+      REGISTRY: harbor.lan.e-dani.com
+      IMAGE: homelab/hermes-agent
+      BUILDKIT_ADDR: tcp://buildkitd-amd64.buildkit.svc.cluster.local:1234
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remote BuildKit
+        run: |
+          docker buildx create --name remote-amd64 --driver remote "$BUILDKIT_ADDR" --use 2>/dev/null || docker buildx use remote-amd64
+          docker buildx inspect --bootstrap
+      - name: Configure Harbor credentials
+        env:
+          HARBOR_USER: ${{ secrets.HARBOR_USER }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.docker"
+          auth="$(printf '%s:%s' "$HARBOR_USER" "$HARBOR_PASSWORD" | base64 -w0)"
+          jq -n --arg registry "$REGISTRY" --arg auth "$auth" \
+            '{auths: {($registry): {auth: $auth}}}' > "$HOME/.docker/config.json"
+          chmod 600 "$HOME/.docker/config.json"
+      - name: Build & push
+        run: |
+          set -euo pipefail
+          tag="$(tr -d '[:space:]' < docker/overlay-tag)"
+          docker buildx build --platform linux/amd64 -f docker/Dockerfile.overlay \
+            -t "$REGISTRY/$IMAGE:$tag" --push .
+          echo "pushed $REGISTRY/$IMAGE:$tag" >> "$GITHUB_STEP_SUMMARY"
