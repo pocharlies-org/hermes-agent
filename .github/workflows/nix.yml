@@ -33,7 +33,7 @@ jobs:
   # flake inputs. On push the classifier fails open and every lane is true.
   detect:
     name: Detect affected areas
-    runs-on: ubuntu-latest
+    runs-on: arc-k8s
     timeout-minutes: 10
     outputs:
       nix: ${{ steps.classify.outputs.nix }}
@@ -54,6 +54,7 @@ jobs:
     # takes minutes and not seconds when the cache misses. `nix flake check`
     # builds 21 checks, and --max-jobs defaults to the core count. It uses the
     # wider runner with no more configuration.
+    # 2026-10-05 devops · fuera de pool: no hay runners de 32/96 núcleos en el clúster; revisar tras dimensionar arc-k8s (INFRA-549, INFRA-548)
     runs-on: ubuntu-latest-32-core
     timeout-minutes: 60
     steps:

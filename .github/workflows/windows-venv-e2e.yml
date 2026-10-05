@@ -27,6 +27,7 @@ concurrency:
 jobs:
   venv-holder-e2e:
     name: venv-holder live E2E (windows-latest)
+    # 2026-10-05 devops · fuera de pool: no existe hardware de esa plataforma en el clúster (skill ci-runners-arc, INFRA-548)
     runs-on: windows-latest
     timeout-minutes: 25
     steps:

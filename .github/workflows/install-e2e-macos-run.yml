@@ -72,6 +72,7 @@ jobs:
       install-ref: ${{ inputs.install-ref }}
       tag-has-desktop: ${{ inputs.tag-has-desktop }}
       leg-id: ${{ inputs.leg-id }}
+      # 2026-10-05 devops · fuera de pool: no existe hardware de esa plataforma en el clúster (skill ci-runners-arc, INFRA-548)
       runner: macos-latest
       timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -83,6 +84,7 @@ jobs:
     if: >-
       inputs.install-method == 'desktop-installer@latest' && inputs.tag-has-desktop
       && contains(fromJSON('["open-app-update", "hermes-desktop-app-update", "hermes-update", "installer-script", "installer-script+desktop"]'), inputs.update-method)
+    # 2026-10-05 devops · fuera de pool: no existe hardware de esa plataforma en el clúster (skill ci-runners-arc, INFRA-548)
     runs-on: macos-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
