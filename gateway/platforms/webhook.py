@@ -583,8 +583,11 @@ class WebhookAdapter(BasePlatformAdapter):
         # Rate limiting (after auth): the route's own quota, else the adapter's. Retry-After is when the oldest
         # hit in the route's window expires, so a sender (Synapse's gmail adapter) can back off and resend.
         now = time.time()
-        if not self._record_rate_limit_hit(route_name, now, self._rate_limit_for(route_config)):
+        limit = self._rate_limit_for(route_config)
+        if not self._record_rate_limit_hit(route_name, now, limit):
             retry_after = max(1, math.ceil(self._rate_counts[route_name][0] + _RATE_WINDOW_SECONDS - now))
+            logger.warning("[webhook] Rate limit exceeded for route %s (%d/min); retry after %ds", route_name, limit,
+                           retry_after)
             return web.json_response({"error": "Rate limit exceeded"}, status=429,
                                      headers={"Retry-After": str(retry_after)})
         payload = self._parse_body(raw_body)

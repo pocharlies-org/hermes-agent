@@ -633,12 +633,15 @@ class TestRouteRateLimit:
         return [(await self._signed_post(cli, route, n)) for n in range(count)]
 
     @pytest.mark.asyncio
-    async def test_route_rate_limit_nine_signed_posts_six_accepted_three_429(self):
+    async def test_route_rate_limit_nine_signed_posts_six_accepted_three_429(self, caplog):
         adapter = _make_adapter(routes=self._routes(**{"gmail-skirmshop": 6}))  # adapter default: 30/min
         adapter.handle_message = AsyncMock()
-        async with TestClient(TestServer(_create_app(adapter))) as cli:
-            resps = await self._burst(cli, "gmail-skirmshop", 9)
+        with caplog.at_level("WARNING", logger="gateway.platforms.webhook"):
+            async with TestClient(TestServer(_create_app(adapter))) as cli:
+                resps = await self._burst(cli, "gmail-skirmshop", 9)
         assert [r.status for r in resps] == [202] * 6 + [429] * 3
+        # Visible in the gateway log (security/SRE grep it): route and the limit that applied.
+        assert sum("Rate limit exceeded for route gmail-skirmshop (6/min)" in m for m in caplog.messages) == 3
         # The client backs off by this: whole seconds, within the window.
         assert all(1 <= int(r.headers["Retry-After"]) <= 60 for r in resps[6:])
 
