@@ -1,0 +1,4 @@
+- Antes: el webhook aplicaba a todas las rutas el `rate_limit` del adaptador (`extra.rate_limit`, 30/min) e ignoraba el `rate_limit` de cada ruta; un 429 no llevaba cabeceras.
+- Ahora: cada ruta usa su propio `rate_limit` (entero > 0; si no, el del adaptador) en una ventana deslizante de 60 s por ruta; el 429 lleva `Retry-After` (segundos) y sale antes de registrar el delivery id. Las rutas del chart `gmail-*` (6/min), `studio` (10/min) y las de 20/min dejan de ir a 30/min.
+- Quién se mueve: el emisor de cada ruta limitada debe tratar el 429 como reintentable y respetar `Retry-After`. El adapter gmail de Synapse hoy lo clasifica `PermanentError` y cuenta el fallo en su breaker (falta ticket en synapse); los avisos no se pierden porque el reclasificador los reintenta con el mismo delivery id.
+- Dónde se decidió: condición 2 de security en INFRA-582 y 00-spec de INFRA-697 (criterios 1 a 4).
