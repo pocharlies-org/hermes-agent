@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -342,14 +343,25 @@ class WebhookAdapter(BasePlatformAdapter):
             self._seen_deliveries.pop(k, None)
         self._seen_deliveries_next_prune_at = now + min(60.0, max(1.0, self._idempotency_ttl / 10))
 
-    def _record_rate_limit_hit(self, route_name: str, now: float) -> bool:
-        """Return True if route is still within limit after recording this hit."""
+    def _rate_limit_for(self, route_config: Optional[dict]) -> int:
+        """Requests per minute for one route: its own ``rate_limit`` when it declares a positive integer,
+        otherwise the adapter's (``extra.rate_limit``, default 30). A value that is not a positive integer
+        falls back to the adapter's limit — never to "unlimited"."""
+        try:
+            limit = int(route_config["rate_limit"])
+        except (KeyError, TypeError, ValueError, OverflowError):  # OverflowError: ``.inf`` from YAML/JSON
+            return self._rate_limit
+        return limit if limit > 0 else self._rate_limit
+
+    def _record_rate_limit_hit(self, route_name: str, now: float, limit: int) -> bool:
+        """Return True if route is still within ``limit`` hits per sliding 60 s window after recording this hit.
+        The window is per route; a rejected hit is not recorded."""
         if not isinstance(window := self._rate_counts.get(route_name), deque):
             window = self._rate_counts[route_name] = deque(window or ())
         cutoff = now - _RATE_WINDOW_SECONDS
         while window and window[0] < cutoff:
             window.popleft()
-        if len(window) >= self._rate_limit:
+        if len(window) >= limit:
             return False
         window.append(now)
         return True
@@ -642,9 +654,16 @@ class WebhookAdapter(BasePlatformAdapter):
             raw_body, error_response = await self._read_authenticated_body(request, route_name, route_config)
         if error_response is not None:
             return error_response
-        # Rate limiting (after auth)
-        if not self._record_rate_limit_hit(route_name, time.time()):
-            return _json_error("Rate limit exceeded", 429)
+        # Rate limiting (after auth): the route's own quota, else the adapter's. Retry-After is when the oldest
+        # hit in the route's window expires, so a sender (Synapse's gmail adapter) can back off and resend.
+        now = time.time()
+        limit = self._rate_limit_for(route_config)
+        if not self._record_rate_limit_hit(route_name, now, limit):
+            retry_after = max(1, math.ceil(self._rate_counts[route_name][0] + _RATE_WINDOW_SECONDS - now))
+            logger.warning("[webhook] Rate limit exceeded for route %s (%d/min); retry after %ds", route_name, limit,
+                           retry_after)
+            return web.json_response({"error": "Rate limit exceeded"}, status=429,
+                                     headers={"Retry-After": str(retry_after)})
         payload = self._parse_body(raw_body)
         if payload is _UNPARSEABLE:
             return _json_error("Cannot parse body", 400)
