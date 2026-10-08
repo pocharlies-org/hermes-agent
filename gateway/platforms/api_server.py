@@ -2784,6 +2784,21 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         payload["has_model_config"] = bool(session.get("model_config"))
         return payload
 
+    def _session_rows_with_topic(self, db: Any, sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Listing rows plus the Telegram topic each one is bound to: ``chat_id`` and ``thread_id``,
+        both None when the row has no topic or is not a Telegram session. Additive: the fields of
+        ``_session_response`` are unchanged. Reads the binding through ``db``'s reverse lookup, so it
+        runs off-loop (the caller wraps it in ``asyncio.to_thread``)."""
+        rows = []
+        for session in sessions:
+            row = self._session_response(session)
+            binding = (db.get_telegram_topic_binding_by_session(session_id=session["id"])
+                       if session.get("source") == "telegram" else None)
+            row["chat_id"] = binding["chat_id"] if binding else None
+            row["thread_id"] = binding["thread_id"] if binding else None
+            rows.append(row)
+        return rows
+
     @staticmethod
     def _message_response(message: Dict[str, Any]) -> Dict[str, Any]:
         message = _project_client_message(message)
@@ -2876,8 +2891,9 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         # Back-filled pins arrive PAST the limit, so counting them would report
         # another page that doesn't exist. Only the recency window decides.
         windowed = sum(1 for s in sessions if not s.get("pinned"))
+        data = await asyncio.to_thread(self._session_rows_with_topic, db, sessions)
         return web.json_response({
-            "object": "list", "data": [self._session_response(s) for s in sessions],
+            "object": "list", "data": data,
             "limit": limit, "offset": offset, "has_more": windowed >= limit})
 
     @_require_auth
