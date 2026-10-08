@@ -85,6 +85,7 @@ Routes define how different webhook sources are handled. Each route is a named e
 | `filters` | No | Declarative payload filters evaluated after auth/body/event filtering and before agent or direct delivery work. Non-matches return `{"status":"ignored","reason":"filter"}` with HTTP 200. |
 | `script` | No | Filter/transform script under `~/.hermes/scripts/`. The webhook payload is passed as JSON on stdin. JSON object stdout replaces the payload before templating; text stdout is exposed as `script_output`; empty stdout, `[SILENT]`, or a nonzero exit code ignores the webhook. |
 | `skills` | No | List of skill names to load for the agent run. |
+| `rate_limit` | No | Requests per minute accepted on this route (positive integer). Overrides the adapter-wide `rate_limit` for this route only; if omitted or not a positive integer, the adapter's limit applies. See [Rate limiting](#rate-limiting). |
 | `toolsets` | No | List of toolset keys (e.g. `["terminal", "file", "web"]`) that **replaces** the platform-level webhook toolset for runs triggered by this route only. Manual config edit only — not settable via `hermes webhook subscribe`, so agent-created subscriptions cannot self-grant elevated tools. Names are validated the same way as `platform_toolsets` entries (unknown or platform-restricted names are dropped). See [Per-route toolsets](#per-route-toolsets). |
 | `deliver` | No | Where to send the response: `github_comment`, `telegram`, `discord`, `slack`, `signal`, `sms`, `whatsapp`, `matrix`, `mattermost`, `homeassistant`, `email`, `dingtalk`, `feishu`, `wecom`, `weixin`, `bluebubbles`, `qqbot`, or `log` (default). |
 | `deliver_extra` | No | Additional delivery config — keys depend on `deliver` type (e.g. `repo`, `pr_number`, `chat_id`). Values support the same `{dot.notation}` templates as `prompt`. |
@@ -386,7 +387,7 @@ hermes webhook subscribe antenna-matches \
 | `400 Bad Request` | Malformed JSON body. |
 | `404 Not Found` | Unknown route name. |
 | `413 Payload Too Large` | Body exceeded `max_body_bytes`. |
-| `429 Too Many Requests` | Route rate limit exceeded. |
+| `429 Too Many Requests` | Route rate limit exceeded. Carries `Retry-After` (seconds). |
 | `502 Bad Gateway` | Target adapter rejected the message or raised. The error is logged server-side; the response body is a generic `Delivery failed` to avoid leaking adapter internals. |
 
 ### Configuration gotchas
@@ -565,16 +566,32 @@ rejected if its `/p/<profile>/` prefix does not match the route binding.
 
 ### Rate limiting
 
-Each route is rate-limited to **30 requests per minute** by default (fixed-window). Configure this globally:
+Each route is rate-limited to **30 requests per minute** by default. The window is sliding (the last 60 seconds) and
+belongs to the route: a burst on one route never uses up another route's quota. Configure this globally:
 
 ```yaml
 platforms:
   webhook:
     extra:
-      rate_limit: 60  # requests per minute
+      rate_limit: 60  # requests per minute, for every route without its own rate_limit
 ```
 
-Requests exceeding the limit receive a `429 Too Many Requests` response.
+A route can set its own quota, which replaces the global one for that route only (a lower or a higher value):
+
+```yaml
+platforms:
+  webhook:
+    extra:
+      routes:
+        mail-alerts:
+          secret: "..."
+          rate_limit: 6   # this route accepts 6 requests per minute
+```
+
+Requests exceeding the limit receive a `429 Too Many Requests` response with a `Retry-After` header (whole seconds until
+the oldest request in the window expires). Only authenticated requests count: a request with an invalid signature is
+rejected with `401` before the rate limit is checked and does not use up the quota. A `429` is returned before the
+delivery id is recorded, so resending the same delivery after `Retry-After` is processed normally.
 
 ### Idempotency
 
