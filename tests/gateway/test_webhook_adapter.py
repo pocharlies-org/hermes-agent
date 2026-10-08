@@ -6,7 +6,7 @@ Covers:
 - Event type filtering
 - HTTP handler behaviour (404, 202, health)
 - Idempotency cache (duplicate delivery IDs)
-- Rate limiting (fixed-window, per route)
+- Rate limiting (sliding window, per route; a route's own ``rate_limit`` over the adapter's)
 - Body size limits
 - INSECURE_NO_AUTH bypass
 - Session isolation for concurrent webhooks
@@ -601,6 +601,124 @@ class TestRateLimiting:
                 headers={"X-GitHub-Delivery": "d-99"},
             )
             assert resp.status == 429
+
+
+class TestRouteRateLimit:
+    """Per-route ``rate_limit`` (INFRA-697): the route's own quota when it declares one, else the adapter's;
+    one sliding 60 s window per route, never shared between routes."""
+
+    _SECRET = "gmail-route-secret"
+
+    @staticmethod
+    def _routes(**limits):
+        """One route per name; ``limits`` maps route name -> its ``rate_limit`` (None = not declared)."""
+        return {
+            name: {"secret": TestRouteRateLimit._SECRET, "prompt": "mail", **({} if lim is None else {"rate_limit": lim})}
+            for name, lim in limits.items()
+        }
+
+    @staticmethod
+    def _signed_post(cli, route, n, secret=_SECRET):
+        """One POST signed like the Synapse gmail adapter (HMAC V2) with its stable delivery id."""
+        body = json.dumps({"n": n}).encode()
+        ts = str(int(time.time()))
+        return cli.post(f"/webhooks/{route}", data=body, headers={
+            "Content-Type": "application/json",
+            "X-Webhook-Timestamp": ts,
+            "X-Webhook-Signature-V2": _generic_v2_signature(body, secret, ts),
+            "X-Request-ID": f"gmail:acct:{route}-{n}",
+        })
+
+    async def _burst(self, cli, route, count):
+        return [(await self._signed_post(cli, route, n)) for n in range(count)]
+
+    @pytest.mark.asyncio
+    async def test_route_rate_limit_nine_signed_posts_six_accepted_three_429(self):
+        adapter = _make_adapter(routes=self._routes(**{"gmail-skirmshop": 6}))  # adapter default: 30/min
+        adapter.handle_message = AsyncMock()
+        async with TestClient(TestServer(_create_app(adapter))) as cli:
+            resps = await self._burst(cli, "gmail-skirmshop", 9)
+        assert [r.status for r in resps] == [202] * 6 + [429] * 3
+        # The client backs off by this: whole seconds, within the window.
+        assert all(1 <= int(r.headers["Retry-After"]) <= 60 for r in resps[6:])
+
+    @pytest.mark.asyncio
+    async def test_route_rate_limit_quotas_are_independent_between_routes(self):
+        routes = self._routes(**{"gmail-dani": 6, "gmail-it": 6, "company": None})
+        adapter = _make_adapter(routes=routes)  # adapter default: 30/min
+        adapter.handle_message = AsyncMock()
+        async with TestClient(TestServer(_create_app(adapter))) as cli:
+            dani = await self._burst(cli, "gmail-dani", 7)
+            it = await self._burst(cli, "gmail-it", 6)
+            company = await self._burst(cli, "company", 10)
+        assert [r.status for r in dani] == [202] * 6 + [429]  # gmail-dani is exhausted...
+        assert {r.status for r in it} == {202}  # ...and gmail-it still has its whole quota
+        assert {r.status for r in company} == {202}  # a route with no rate_limit is not squeezed by the others
+
+    @pytest.mark.asyncio
+    async def test_route_rate_limit_absent_uses_the_adapter_limit(self):
+        adapter = _make_adapter(routes=self._routes(plain=None), rate_limit=3)
+        adapter.handle_message = AsyncMock()
+        async with TestClient(TestServer(_create_app(adapter))) as cli:
+            resps = await self._burst(cli, "plain", 4)
+        assert [r.status for r in resps] == [202, 202, 202, 429]
+
+    @pytest.mark.asyncio
+    async def test_route_rate_limit_may_exceed_the_adapter_limit(self):
+        adapter = _make_adapter(routes=self._routes(busy=5), rate_limit=2)
+        adapter.handle_message = AsyncMock()
+        async with TestClient(TestServer(_create_app(adapter))) as cli:
+            resps = await self._burst(cli, "busy", 6)
+        assert [r.status for r in resps] == [202] * 5 + [429]
+
+    @pytest.mark.asyncio
+    async def test_route_rate_limit_is_not_consumed_by_bad_signatures(self):
+        adapter = _make_adapter(routes=self._routes(**{"gmail-it": 6}))
+        adapter.handle_message = AsyncMock()
+        async with TestClient(TestServer(_create_app(adapter))) as cli:
+            for n in range(8):
+                bad = await self._signed_post(cli, "gmail-it", n, secret="not-the-secret")
+                assert bad.status == 401
+            good = await self._signed_post(cli, "gmail-it", 99)
+        assert good.status == 202
+
+    @pytest.mark.asyncio
+    async def test_route_rate_limit_429_does_not_burn_the_delivery_id(self):
+        """The resend of a rejected delivery (same X-Request-ID) is processed once the window frees up,
+        not skipped as a duplicate; the one already accepted is still a duplicate."""
+        adapter = _make_adapter(routes=self._routes(**{"gmail-it": 1}))
+        adapter.handle_message = AsyncMock()
+        async with TestClient(TestServer(_create_app(adapter))) as cli:
+            first = await self._signed_post(cli, "gmail-it", 1)
+            rejected = await self._signed_post(cli, "gmail-it", 2)
+            adapter._rate_counts["gmail-it"].clear()  # a minute later
+            resent = await self._signed_post(cli, "gmail-it", 2)
+            adapter._rate_counts["gmail-it"].clear()
+            again = await self._signed_post(cli, "gmail-it", 1)
+            again_body = await again.json()
+        assert (first.status, rejected.status, resent.status) == (202, 429, 202)
+        assert (again.status, again_body["status"]) == (200, "duplicate")
+        assert adapter.handle_message.await_count == 2  # one run per distinct delivery, none duplicated
+
+    def test_route_rate_limit_window_slides_and_reopens_after_a_minute(self):
+        adapter = _make_adapter()
+        assert [adapter._record_rate_limit_hit("r", t, 6) for t in range(6)] == [True] * 6
+        assert adapter._record_rate_limit_hit("r", 59.0, 6) is False  # a rejected hit is not recorded
+        assert adapter._record_rate_limit_hit("r", 60.5, 6) is True  # the hit at t=0 has left the window
+        assert adapter._record_rate_limit_hit("r", 60.6, 6) is False  # t=1..5 and 60.5 still count: 6 in the window
+        assert adapter._record_rate_limit_hit("other", 59.0, 6) is True  # another route: its own window
+
+    @pytest.mark.parametrize("declared, expected", [
+        (6, 6), ("6", 6), (None, 30), (0, 30), (-1, 30), ("often", 30), ([], 30), (float("inf"), 30),
+    ])
+    def test_route_rate_limit_value_must_be_a_positive_integer_else_adapter_limit(self, declared, expected):
+        adapter = _make_adapter()  # adapter default: 30/min
+        assert adapter._rate_limit_for({"rate_limit": declared}) == expected
+
+    def test_route_rate_limit_missing_key_or_config_uses_the_adapter_limit(self):
+        adapter = _make_adapter(rate_limit=7)
+        assert adapter._rate_limit_for({}) == 7
+        assert adapter._rate_limit_for(None) == 7
 
 
 # ===================================================================
