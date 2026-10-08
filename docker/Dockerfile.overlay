@@ -1,0 +1,7 @@
+# Overlay image: the files this branch changes, on top of the live image.
+# Base = the tag in values.yaml of k8s-openclaw-qwen36-pocharlies (deploy/prod) when the overlay was cut.
+# INFRA-697: webhook.py of deploy/v2026.9.14-reasoning-picker @ 3426968 (hermes-agent#14). The webhook.py of the base
+# (layer of f24a9c7) is sha256 1651b461e6c5…, mode 644; no later layer of the base touches it.
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-f24a9c7-pbddbbb7
+FROM ${BASE}
+COPY --chmod=644 gateway/platforms/webhook.py /opt/hermes/gateway/platforms/webhook.py
