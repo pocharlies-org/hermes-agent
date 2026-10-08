@@ -77,11 +77,33 @@ este fork con overlays de un fichero y siembra la config por ConfigMap (recarga 
 `kubectl exec -n hermes deploy/hermes-gateway -c hermes -- hermes -p <perfil> sessions list` y el
 `/health/detailed` del pod.
 
+**Imagen overlay.** Un push a una rama `overlay/**` lanza `.github/workflows/hermes-overlay.yml`:
+- corre en el runner `arc-k8s` con el BuildKit del clúster (`buildkitd-amd64.buildkit.svc.cluster.local:1234`);
+- construye `docker/Dockerfile.overlay`: `ARG BASE` es el tag vivo del chart y los `COPY` son los ficheros cambiados;
+- sube el tag de `docker/overlay-tag` a `harbor.lan.e-dani.com/homelab/hermes-agent` con el robot de la org
+  (`HARBOR_USER`/`HARBOR_PASSWORD`).
+
+El pin en `helm/hermes/values.yaml` de k8s-openclaw-qwen36-pocharlies es una PR aparte, y el reinicio lo hace
+`hermes-despliegue.yml`. Al cortar un overlay nuevo se cambian a la vez `ARG BASE`, los `COPY` y `overlay-tag`.
+El tag es mutable: un segundo push a la misma rama lo sobrescribe en Harbor, así que cada overlay lleva tag nuevo.
+
+Orden de un overlay nuevo:
+1. `hermes-overlay.yml` y `docker/Dockerfile.overlay` no están en `main` ni en la rama de deploy: se traen a la rama
+   nueva desde la última `overlay/**` (`git checkout origin/overlay/<anterior> -- .github/workflows/hermes-overlay.yml docker/Dockerfile.overlay docker/overlay-tag`).
+2. `ARG BASE` = el tag que lleve `helm/hermes/values.yaml` de `deploy/prod` en ese momento (releerlo: otro overlay
+   puede haberse colado).
+3. El `COPY` sobreescribe sin mirar: antes se comprueba que el fichero de la imagen BASE es el esperado (sha256) y que
+   el del overlay es byte a byte el de la rama de deploy.
+4. Antes del primer push de la rama, `Dockerfile.overlay` y `overlay-tag` ya editados (el push construye y sube); el
+   tag es `fork-<commit base>-p<7 caracteres de un commit de la rama de deploy>`; la PR de pin se abre cuando el tag
+   existe en Harbor.
+
 ## 8. Decisiones y trampas
 
 - `2026-09` · imagen desde rama del fork + overlays de un fichero en vez de fork interno divergente · chart `values.yaml` `image:` (SC-710, DGX-366)
 - `2026-10-02` · el enlace topic→ticket no vive en el runtime: Telegram liga la clave desde el texto del mensaje · SC-1436 (decisión del CTO)
 - trampa: una sesión del api_server reanudada con modelo persistido re-resolvía el provider `custom` pelado → «No LLM provider configured» desde el 2.º turno · overlay `fix/api-server-named-provider-resume` (DGX-366)
+- `2026-10-08` · `webhook.py`: `rate_limit` por ruta como overlay de un fichero sobre `fork-f24a9c7-pbddbbb7` · INFRA-697 (hermes-agent#14)
 
 ### Sesiones por ticket (SC-1422)
 
