@@ -90,7 +90,7 @@ este fork con overlays y siembra la config por ConfigMap (recarga en caliente v�
   (`HARBOR_USER`/`HARBOR_PASSWORD`).
 
 El pin en `helm/hermes/values.yaml` de k8s-openclaw-qwen36-pocharlies es una PR aparte, y el reinicio lo hace
-`hermes-despliegue.yml`. Al cortar un overlay nuevo se cambian a la vez `ARG BASE`, los `COPY` y `overlay-tag`.
+`hermes-despliegue.yml`. Al cortar un overlay nuevo se cambian a la vez `ARG BASE`, los `COPY` y `overlay-tag` en el primer commit que se empuja.
 El tag es mutable: un segundo push a la misma rama lo sobrescribe en Harbor, así que cada overlay lleva tag nuevo.
 
 ## 8. Decisiones y trampas
@@ -152,4 +152,7 @@ pudran con el próximo rebase del fork:
   compañía (timer de 30 min, claves no `SC` incluidas) es `company_bots.archivar_sesiones` en
   x86-host-runtime-pocharlies `libexec/company_bots.py` y opera sobre este almacén.
 
-Última verificación contra el código: 2026-10-05 · 8b7a608 (rama `overlay/dgx-586-578`)
+- `2026-10-08` · `session_scope: task` en la config de un servidor MCP abre una conexión hija por `task_id` (tope 8, 600 s sin uso), con su navegador y su `_rpc_lock`; el chart lo emite solo para `playwright` · `tools/mcp_tool_handlers.py::_task_server` (SC-1939)
+- trampa: una rama `overlay/**` cortada de otra hereda su `docker/overlay-tag` y su `ARG BASE`: su primer push vuelve a publicar en Harbor el tag del overlay anterior, que es el desplegado. Cambiar `BASE`, los `COPY` y el tag en el primer commit que se empuja y no empujar antes (SC-1939, 09-10-2026)
+
+Última verificación contra el código: 2026-10-09 · 9e76fce (rama `overlay/sc1939-session-scope-task`)
