@@ -5921,7 +5921,15 @@ def main():
         from hermes_cli.stdio import configure_windows_stdio
         configure_windows_stdio()
 
-    for _step in (_register_identity, _arm_watchdog, _utf8_stdio):
+    def _harden_proc_environ() -> None:
+        # PR_SET_DUMPABLE=0: /proc/<pid>/environ answers EACCES to same-uid processes,
+        # so a terminal-spawned python can no longer read the gateway's secrets (SC-2147).
+        # No-op off Linux; children spawned AFTER this point are unaffected (execve resets
+        # dumpable), so scrubbing stays the line of defense for them.
+        from hermes_proc_hardening import make_process_non_dumpable
+        make_process_non_dumpable()
+
+    for _step in (_harden_proc_environ, _register_identity, _arm_watchdog, _utf8_stdio):
         _best_effort(_step)
 
     import argparse

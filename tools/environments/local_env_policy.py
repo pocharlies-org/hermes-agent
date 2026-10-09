@@ -254,4 +254,9 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     "HASS_TOKEN", "EMAIL_PASSWORD", "HERMES_DASHBOARD_SESSION_TOKEN",
     # Remote-compute / infrastructure secrets
     "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "DAYTONA_API_KEY",
+    # Payment-confirmation plugin secrets (SC-2147): the Jira token and HMAC signing
+    # keys the CONFIRMAR_* payment flow injects into the gateway env. No spawned
+    # child needs them; a terminal ``python`` reading os.environ must not see them.
+    "CONFIRMAR_PAGO_JIRA_TOKEN", "CONFIRMAR_PAGO_HMAC_SECRET",
+    "CONFIRMAR_PAGO_HMAC_DECISION_SECRET",
 })
