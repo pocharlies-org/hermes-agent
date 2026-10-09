@@ -85,12 +85,12 @@ este fork con overlays y siembra la config por ConfigMap (recarga en caliente v�
 
 **Imagen overlay.** Un push a una rama `overlay/**` lanza `.github/workflows/hermes-overlay.yml`:
 - corre en el runner `arc-k8s` con el BuildKit del clúster (`buildkitd-amd64.buildkit.svc.cluster.local:1234`);
-- construye `docker/Dockerfile.overlay`: `ARG BASE` es el tag vivo del chart y los `COPY` son los ficheros cambiados;
+- construye `docker/Dockerfile.overlay`: `ARG BASE` es el tag y el digest vivos del chart en el momento del pin y los `COPY` son los ficheros cambiados;
 - sube el tag de `docker/overlay-tag` a `harbor.lan.e-dani.com/homelab/hermes-agent` con el robot de la org
   (`HARBOR_USER`/`HARBOR_PASSWORD`).
 
 El pin en `helm/hermes/values.yaml` de k8s-openclaw-qwen36-pocharlies es una PR aparte, y el reinicio lo hace
-`hermes-despliegue.yml`. Al cortar un overlay nuevo se cambian a la vez `ARG BASE`, los `COPY` y `overlay-tag`.
+`hermes-despliegue.yml`. Al cortar un overlay nuevo se cambian a la vez `ARG BASE`, los `COPY` y `overlay-tag` en el primer commit que se empuja.
 El tag es mutable: un segundo push a la misma rama lo sobrescribe en Harbor, así que cada overlay lleva tag nuevo.
 
 ## 8. Decisiones y trampas
@@ -152,4 +152,7 @@ pudran con el próximo rebase del fork:
   compañía (timer de 30 min, claves no `SC` incluidas) es `company_bots.archivar_sesiones` en
   x86-host-runtime-pocharlies `libexec/company_bots.py` y opera sobre este almacén.
 
-Última verificación contra el código: 2026-10-05 · 8b7a608 (rama `overlay/dgx-586-578`)
+- `2026-10-08` · `session_scope: task` en la config de un servidor MCP abre una conexión hija por `task_id` (tope 8, 600 s sin uso), con su navegador y su `_rpc_lock`; el chart lo emite solo para `playwright` · `tools/mcp_tool_handlers.py::_task_server` (SC-1939)
+- trampa: `ARG BASE` es el tag vivo en `origin/deploy/prod` del chart **en el momento del pin** (no el de tu checkout), fijado además por digest, el del `imageID` del pod. Dos overlays en vuelo sobre el mismo tag no pueden estar vivos a la vez: el segundo se reconstruye sobre el primero. Comprobar al construir: `diff_ids` de la imagen = los de la base + 1 por cada `COPY`. Una rama cortada de otro overlay hereda su `overlay-tag`: no empujar con un tag que ya exista en Harbor (SC-1939, 09-10-2026; `pbddbbb7` pisado por la primera versión de la rama, y la base vieja no era la viva)
+
+Última verificación contra el código: 2026-10-09 · c54c13d (rama `overlay/sc1939-session-scope-task`)

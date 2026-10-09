@@ -3,6 +3,7 @@ ladder: trust gating, circuit breaker, auth (401) refresh, session-expired recon
 
 import logging
 import asyncio
+import threading
 import contextvars
 import inspect
 import json
@@ -104,6 +105,62 @@ def _acquire_call_server(server_name: str, tool_timeout: float):
         return None, tool_error(f"MCP server '{server_name}' transport is down; reconnect requested. Do NOT retry this "
                                 f"tool immediately — give it a few seconds to come back.")
     return None, not_connected
+
+
+# session_scope: "task" — one connection (own browser, own _rpc_lock) per task_id, not per server.
+# ponytail: idle timeout and cap are constants; the cap evicts the oldest even if it is mid-call, and last_used is set
+# when a call starts, so a call over 600 s can lose its child to another task's sweep. _task_lock is held during start()
+# (up to 60 s) and the closes: a hung start stalls every task on that server, so go to a lock per key if a down gateway
+# starts to hurt. A task_id that is a uuid per turn (webhook) opens its own browser (~70 MB) and frees it after 600 s.
+_TASK_IDLE_S = 600
+_TASK_MAX = 8
+_task_sessions: Dict[Tuple[int, str], list] = {}  # (id(server), task_id) -> [child, last_used]
+_task_lock = threading.Lock()
+
+
+_task_session_cls = None
+
+
+def _task_session_class():
+    """Child connection of one task, built on first use: ``tools.mcp_tool`` imports this module (cycle).
+    Its tools are the parent's (registered once), so discovery is skipped."""
+    global _task_session_cls
+    if _task_session_cls is None:
+        from tools.mcp_tool import MCPServerTask  # lazy: mcp_tool -> transport -> registration -> handlers cycle
+
+        class _TaskSession(MCPServerTask):
+            async def _discover_tools(self):
+                return
+
+        _task_session_cls = _TaskSession
+    return _task_session_cls
+
+
+def _close_task_session(key) -> None:
+    child = _task_sessions.pop(key)[0]
+    try:
+        _loop._run_on_mcp_loop(lambda: child.shutdown(), timeout=30)
+    except Exception as exc:  # a stuck close of another task's child must not fail the current call
+        logger.warning("MCP session_scope: closing a task connection failed: %s", exc)
+
+
+def _task_server(server, task_id):
+    """The server a call runs on: the shared one unless its config asks for ``session_scope: task``."""
+    if not task_id or (getattr(server, "_config", None) or {}).get("session_scope") != "task":
+        return server
+    key = (id(server), task_id)
+    with _task_lock:
+        now = time.monotonic()
+        for k in [k for k, (_, used) in _task_sessions.items() if now - used > _TASK_IDLE_S]:
+            _close_task_session(k)
+        if key not in _task_sessions:
+            if len(_task_sessions) >= _TASK_MAX:
+                _close_task_session(min(_task_sessions, key=lambda k: _task_sessions[k][1]))
+            child = _task_session_class()(server.name)
+            _loop._run_on_mcp_loop(lambda: child.start(server._config), timeout=60)
+            _task_sessions[key] = [child, now]
+        _task_sessions[key][1] = now
+        return _task_sessions[key][0]
 
 
 def _result_is_error(result) -> bool:
@@ -487,6 +544,10 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
         server, error = _acquire_call_server(server_name, tool_timeout)
         if server is None:
             return error
+        try:
+            server = _task_server(server, kwargs.get("task_id"))
+        except Exception as exc:
+            return _strike(server_name, f"MCP server '{server_name}' could not open a session for this task: {exc}")
 
         async def _call():
             async with server._rpc_lock, _track_inflight_rpc(server, server_name, op):
