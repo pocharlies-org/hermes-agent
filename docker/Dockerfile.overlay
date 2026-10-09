@@ -1,7 +1,5 @@
 # Overlay image: the files this branch changes, on top of the live image.
 # Base = the tag in values.yaml of k8s-openclaw-qwen36-pocharlies (deploy/prod) when the overlay was cut.
-ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-f24a9c7-p068a375
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-f24a9c7-pbddbbb7
 FROM ${BASE}
-COPY --chmod=664 gateway/platforms/api_server.py /opt/hermes/gateway/platforms/api_server.py
-COPY --chmod=644 agent/chat_completion_helpers.py /opt/hermes/agent/chat_completion_helpers.py
-COPY --chmod=644 agent/litellm_session_header.py /opt/hermes/agent/litellm_session_header.py
+COPY --chmod=644 tools/mcp_tool_handlers.py /opt/hermes/tools/mcp_tool_handlers.py
