@@ -35,6 +35,12 @@ _IS_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger(__name__)
 
+# Tier-1 names matched case-folded (Windows env blocks are case-insensitive), like
+# ``_scrub_credentials`` does. Applied unconditionally in ``_filter_secret_env`` so
+# every ``_scrubbed_env`` surface (terminal, background/PTY, script runners) honors
+# the "stripped from EVERY spawned subprocess" contract (SC-2147).
+_ALWAYS_STRIP_KEYS_FOLDED = frozenset(k.upper() for k in _ALWAYS_STRIP_KEYS)
+
 # --- Terminal temp-cache pruning ---
 # get_temp_dir() defaults to HERMES_HOME/cache/terminal (real storage, not tmpfs), so
 # stale artifacts don't vanish on reboot: the gateway housekeeping loop prunes hourly
@@ -258,10 +264,16 @@ def _filter_secret_env(
             if not unwrap_force:
                 continue
             key = key[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            if not _is_hermes_internal_secret(key):
+            if (not _is_hermes_internal_secret(key)
+                    and key.upper() not in _ALWAYS_STRIP_KEYS_FOLDED):
                 out[key] = value
             continue
-        if _is_hermes_internal_secret(key) or key.upper() in plugin_strip_folded:
+        # Tier-1 (_ALWAYS_STRIP_KEYS) strips unconditionally here, ahead of the
+        # passthrough check — matching _scrub_credentials' "stripped from EVERY
+        # spawned subprocess" contract on the non-terminal surface (SC-2147).
+        if (key.upper() in _ALWAYS_STRIP_KEYS_FOLDED
+                or _is_hermes_internal_secret(key)
+                or key.upper() in plugin_strip_folded):
             continue
         first_party = _is_terminal_first_party_env(key)
         passthrough = is_env_passthrough(key)
@@ -297,7 +309,8 @@ def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
     # Unguarded on purpose: a scope/config failure here must be loud, not silently drop the
     # declared secret again (#114209); _scrub_child_env calls it the same way.
     from tools.env_passthrough import scoped_passthrough_additions
-    out.update((k, v) for k, v in scoped_passthrough_additions(out).items() if k not in plugin_strip)
+    out.update((k, v) for k, v in scoped_passthrough_additions(out).items()
+               if k not in plugin_strip and k.upper() not in _ALWAYS_STRIP_KEYS_FOLDED)
     path_key = _path_env_key(out)
     # Keep bare ``hermes`` invocations available to child jobs even when the gateway was launched by a
     # service manager or cron without the console script's directory on PATH. The terminal environment
@@ -681,7 +694,11 @@ def _make_run_env(env: dict) -> dict:
     the LAUNCH profile's; under a routed home override its ``.env`` residue is dropped first
     (``strip_launch_profile_env``, a no-op for the launch profile) so the backend's own ``env``
     and the served profile's declared passthrough names are what the child sees."""
-    return _scrubbed_env([(dict(strip_launch_profile_env(os.environ.copy()) | env), True)], frozenset(),
+    # Plugin-registered terminal-backend strip keys apply here too, as in
+    # _sanitize_subprocess_env — the bare frozenset() was a hole that let plugin
+    # credentials reach terminal children (SC-2147).
+    return _scrubbed_env([(dict(strip_launch_profile_env(os.environ.copy()) | env), True)],
+                         _plugin_terminal_env_strip_keys(),
                          lambda p: _prepend_git_bash_dirs(_append_missing_sane_path_entries(p)))
 
 
