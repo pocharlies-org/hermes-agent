@@ -108,7 +108,10 @@ def _acquire_call_server(server_name: str, tool_timeout: float):
 
 
 # session_scope: "task" — one connection (own browser, own _rpc_lock) per task_id, not per server.
-# ponytail: idle timeout and cap are constants; the cap evicts the oldest even if it is mid-call.
+# ponytail: idle timeout and cap are constants; the cap evicts the oldest even if it is mid-call, and last_used is set
+# when a call starts, so a call over 600 s can lose its child to another task's sweep. _task_lock is held during start()
+# (up to 60 s) and the closes: a hung start stalls every task on that server, so go to a lock per key if a down gateway
+# starts to hurt. A task_id that is a uuid per turn (webhook) opens its own browser (~70 MB) and frees it after 600 s.
 _TASK_IDLE_S = 600
 _TASK_MAX = 8
 _task_sessions: Dict[Tuple[int, str], list] = {}  # (id(server), task_id) -> [child, last_used]
@@ -135,7 +138,10 @@ def _task_session_class():
 
 def _close_task_session(key) -> None:
     child = _task_sessions.pop(key)[0]
-    _loop._run_on_mcp_loop(lambda: child.shutdown(), timeout=30)
+    try:
+        _loop._run_on_mcp_loop(lambda: child.shutdown(), timeout=30)
+    except Exception as exc:  # a stuck close of another task's child must not fail the current call
+        logger.warning("MCP session_scope: closing a task connection failed: %s", exc)
 
 
 def _task_server(server, task_id):
