@@ -97,6 +97,7 @@ El tag es mutable: un segundo push a la misma rama lo sobrescribe en Harbor, as�
 
 - `2026-09` · imagen desde rama del fork + overlays puntuales en vez de fork interno divergente · chart `values.yaml` `image:` (SC-710, DGX-366)
 - `2026-10-02` · el enlace topic→ticket no vive en el runtime: Telegram liga la clave desde el texto del mensaje · SC-1436 (decisión del CTO)
+- `2026-10-08` · `GET /api/sessions` devuelve `chat_id` y `thread_id` en cada fila: la sesión se vincula por el binding de topic de Telegram (`telegram_dm_topic_bindings`, lectura inversa por `session_id`); una sesión sin binding devuelve `null` · INFRA-776
 - trampa: una sesión del api_server reanudada con modelo persistido re-resolvía el provider `custom` pelado → «No LLM provider configured» desde el 2.º turno · overlay `fix/api-server-named-provider-resume` (DGX-366)
 
 - `2026-10-05` · el executor por defecto del loop se dimensiona a `max_concurrent_runs + 64`; `HERMES_EXECUTOR_WORKERS`
