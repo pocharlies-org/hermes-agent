@@ -1,8 +1,8 @@
 # Overlay image: the files this branch changes, on top of the live image.
 # Base = the tag in values.yaml of k8s-openclaw-qwen36-pocharlies (deploy/prod) when the overlay was cut, pinned by
 # the digest the pods run (kubectl imageID, 11-10).
-# DGX-791: tools/mcp_tool_agent.py, agent/tool_executor.py and tools/code_execution_tool.py of DGX-791-tool-scope @ 9acc598
-# (hermes-agent#20; later commits of the PR touch no code).
+# DGX-791: tools/mcp_tool_agent.py, agent/tool_executor.py and tools/code_execution_tool.py of deploy/v2026.9.14-reasoning-picker @ c9eca7d
+# (squash of hermes-agent#20).
 # In the base the three are the files of f24a9c7 (sha256 05a96e1dc305…, 9634ebdc01b1…, dbadc37c5fc9…): no overlay since then
 # (api_server.py, title_generator.py, webhook.py…) touched them.
 ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-f24a9c7-p3426968@sha256:b85e7e842e23fade9de0acc4b9ebc38461b39d6bb8a2d83106daf9038126fd47
