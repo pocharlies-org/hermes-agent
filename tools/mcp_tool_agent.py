@@ -154,23 +154,21 @@ def persist_agent_tool_names(agent) -> None:
 def restore_agent_tool_prefix(agent, saved_names: list) -> bool:
     """Fold a freshly built agent's ``tools`` onto the session's saved order; True if changed.
     After agent-cache eviction the gateway rebuilds a NEW AIAgent with no predecessor to
-    preserve, so the saved name list stands in (``_merge_preserving_prefix`` rule; a saved
-    tool still registered but failing its probe is carried forward from the registry schema)."""
+    preserve, so the saved name list stands in: saved tools the fresh build still offers keep
+    their slot, new ones append at the tail, and a saved tool the fresh build does NOT offer is
+    dropped. Carrying it forward from the registry kept a tool the profile no longer grants
+    executable in every open conversation (DGX-791: ``browser_exec`` after ``browser`` left the
+    secretarias' toolsets); the cache breaks once, on the turn the tool really goes away."""
     if not saved_names:
         return False
-    from tools.registry import registry
     fresh_defs = _agent_tool_defs(agent)
     fresh = {_def_name(t): t for t in fresh_defs}
-
-    def _saved_def(name):
-        if name in fresh:
-            return fresh[name]
-        entry = registry.get_entry(name)
-        return None if entry is None else {"type": "function", "function": {**entry.schema, "name": entry.name}}
-
-    saved_defs = [d for d in map(_saved_def, saved_names) if d is not None]
-    registered_names = {entry.name for entry in registry.get_all_entries()}
-    merged, merged_names = _merge_preserving_prefix(saved_defs, fresh_defs, registered_names)
+    saved_defs = [fresh[name] for name in saved_names if name in fresh]
+    retired = [name for name in saved_names if name not in fresh]
+    if retired:
+        logger.info("tools freeze: session %s drops %d tool(s) its config no longer offers: %s",
+                    getattr(agent, "session_id", None) or "-", len(retired), ", ".join(retired))
+    merged, merged_names = _merge_preserving_prefix(saved_defs, fresh_defs, set())
     _reinject_authorized_dynamic_tools(agent, merged, merged_names)
     with _agent_tools_lock:
         if merged == fresh_defs:

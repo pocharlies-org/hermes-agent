@@ -1673,6 +1673,7 @@ class TestExecuteToolCalls:
         assert [m["tool_call_id"] for m in tool_results] == ["c1", "c2"]
 
     def test_sequential_memory_remove_notifies_provider_with_tool_result(self, agent):
+        agent.valid_tool_names.add("memory")  # DGX-791: only offered tools run
         old_text = "stale preference entry"
         tc = _mock_tool_call(
             name="memory",
@@ -2228,6 +2229,7 @@ class TestConcurrentToolExecution:
         assert observed[0]["tool_request_middleware_trace"] == trace
 
     def test_sequential_browser_type_callbacks_redact_api_key(self, agent):
+        agent.valid_tool_names.add("browser_type")  # DGX-791: only offered tools run
         secret = "sk-proj-ABCD1234567890EFGH"
         tool_call = _mock_tool_call(
             name="browser_type",
@@ -2265,6 +2267,7 @@ class TestConcurrentToolExecution:
 
     def test_sequential_blocked_tool_skips_checkpoints_and_callbacks(self, agent, monkeypatch):
         """Sequential path: blocked tool should not trigger checkpoints or start callbacks."""
+        agent.valid_tool_names.add("write_file")  # DGX-791: blocked by the plugin hook, not by scope
         tool_call = _mock_tool_call(name="write_file",
                                     arguments='{"path":"test.txt","content":"hello"}',
                                     call_id="c1")

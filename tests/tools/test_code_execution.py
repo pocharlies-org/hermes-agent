@@ -681,12 +681,16 @@ class TestExecuteCodeEdgeCases(unittest.TestCase):
 
 
     @unittest.skipIf(sys.platform == "win32", "UDS not available on Windows")
-    def test_nonoverlapping_tools_fallback(self):
-        """When enabled_tools has no overlap with SANDBOX_ALLOWED_TOOLS,
-        should fall back to all allowed tools."""
+    def test_nonoverlapping_tools_get_no_sandbox_tools(self):
+        """When enabled_tools has no overlap with SANDBOX_ALLOWED_TOOLS the script gets
+        none of them: it used to fall back to all, so a session without terminal reached
+        terminal() through the sandbox RPC (DGX-791)."""
         code = (
-            "from hermes_tools import terminal\n"
-            "print('fallback ok')\n"
+            "try:\n"
+            "    from hermes_tools import terminal\n"
+            "    print('leak')\n"
+            "except ImportError:\n"
+            "    print('no terminal')\n"
         )
         with patch("model_tools.handle_function_call",
                     return_value=json.dumps({"ok": True})):
@@ -695,7 +699,8 @@ class TestExecuteCodeEdgeCases(unittest.TestCase):
                 enabled_tools=["vision_analyze", "browser_snapshot"],
             ))
         self.assertEqual(result["status"], "success")
-        self.assertIn("fallback ok", result["output"])
+        self.assertIn("no terminal", result["output"])
+        self.assertNotIn("leak", result["output"])
 
 
 # ---------------------------------------------------------------------------
