@@ -148,3 +148,23 @@ def test_execute_code_sandbox_only_gets_offered_tools():
     assert _sandbox_tools_for(["execute_code"]) == frozenset()
     assert _sandbox_tools_for(["execute_code", "terminal"]) == frozenset({"terminal"})
     assert _sandbox_tools_for(None) == SANDBOX_ALLOWED_TOOLS
+
+
+@pytest.mark.parametrize("mode", ["sequential", "concurrent"])
+def test_continuing_session_drops_a_saved_tool_the_profile_no_longer_offers(mode, browser_handler):
+    """The DGX-791 incident. The session row pinned ``tool_names`` while the profile still had
+    ``browser``; the profile lost it, and the tools freeze (``restore_agent_tool_prefix`` on a
+    continuing session) restored ``browser_exec`` into tools[] and valid_tool_names, so the turn
+    loop let the model call it. Now the restore drops it and the call is refused."""
+    from tools.mcp_tool_agent import restore_agent_tool_prefix
+
+    saved = ["browser_exec", "browser_vault_list", "web_search", "memory"]
+    agent = _agent("web_search", "memory", "todo_list")  # what the profile offers today
+
+    restore_agent_tool_prefix(agent, saved)
+
+    assert [t["function"]["name"] for t in agent.tools] == ["web_search", "memory", "todo_list"]
+    assert not {"browser_exec", "browser_vault_list"} & agent.valid_tool_names
+    results = _run(agent, mode, _call("browser_exec", {"code": "print(1)"}, "c1"))
+    browser_handler.assert_not_called()
+    assert "'browser_exec' is not available in this session" in results[0]["content"]
