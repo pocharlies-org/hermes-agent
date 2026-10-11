@@ -1,0 +1,4 @@
+- Antes: una llamada directa a una tool registrada se ejecutaba aunque no estuviera en lo ofrecido a la sesión (`agent.valid_tool_names`), y el sandbox de `execute_code` recibía las siete tools del sandbox cuando la sesión no tenía ninguna.
+- Ahora: la llamada directa fuera de lo ofrecido vuelve al modelo como error `'X' is not available in this session` (post_tool_call `blocked`, `tool_scope_block`, WARNING en el log); `execute_code` solo expone dentro del script las tools del sandbox que la sesión tiene.
+- Quién se mueve: un perfil que dependiera de usar una tool fuera de sus toolsets (p. ej. `browser_exec` sin `browser`, o `terminal()` desde `execute_code` sin `terminal`) tiene que declararla en `platform_toolsets` o en la ruta del chart `helm/hermes`.
+- Decisión: DGX-791 (CTO, 11-10-2026), a raíz de DGX-760.
