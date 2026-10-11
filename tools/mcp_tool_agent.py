@@ -213,7 +213,6 @@ def restore_agent_tool_prefix(agent, saved) -> bool:
     pinned, version = (saved.get("tools") or [], saved.get("version")) if isinstance(saved, dict) else (saved, None)
     if not pinned:
         return False
-    from tools.registry import registry
     fresh_defs = _agent_tool_defs(agent)
     fresh = {_def_name(t): t for t in fresh_defs}
     registered_names = {entry.name for entry in registry.get_all_entries()}

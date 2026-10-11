@@ -458,12 +458,36 @@ class _ParsedCall:
         return _ToolCallRef(self.name, self.args, task_id, _pairing_tool_call_id(self.tool_call), self.middleware_trace)
 
 
+def _offered_scope_block(agent, function_name: str) -> Optional[str]:
+    """Block message when a DIRECT call names a tool not offered to this session, else None.
+
+    ``registry.dispatch`` only knows what is registered, so a model echoing a name from its
+    history ran a tool its toolsets exclude (DGX-791: ``browser_exec`` on a profile without
+    ``browser``). The offered set is ``agent.valid_tool_names``: the schemas sent to the model
+    (bridges ``tool_search``/``tool_describe``/``tool_call`` included) plus what is injected into
+    it — context-engine tools, memory-provider tools, ``message_agent``, the kanban handoff
+    tools of a dispatched worker. Deferred tools stay reachable through ``tool_call``, whose
+    own scope is ``_tool_search_scoped_names``. ``None`` = an agent that never resolved tools
+    (test doubles): no gate, as before."""
+    offered = getattr(agent, "valid_tool_names", None)
+    if offered is None or function_name in offered:
+        return None
+    logger.warning(
+        "tool %s blocked: not offered to this session (session=%s)",
+        function_name, getattr(agent, "session_id", None) or "-",
+    )
+    return f"'{function_name}' is not available in this session. Use only the tools in your tool list."
+
+
 def _parse_tool_call(agent, tool_call, *, flatten_probe: bool = False) -> _ParsedCall:
     name = _canonical_tool_name(tool_call.function.name)
     args, parse_error = _parse_tool_arguments(tool_call.function.arguments)
     scope_block = None
     if parse_error is None:
-        name, args, scope_block = _unwrap_tool_search_call(agent, name, args, flatten_probe=flatten_probe)
+        # Both executors (sequential, concurrent; delegate_task children run the same ones) parse here.
+        scope_block = _offered_scope_block(agent, name)
+        if scope_block is None:
+            name, args, scope_block = _unwrap_tool_search_call(agent, name, args, flatten_probe=flatten_probe)
     return _ParsedCall(tool_call, name, args, [], parse_error, scope_block)
 
 

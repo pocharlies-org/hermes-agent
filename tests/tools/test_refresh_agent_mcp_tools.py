@@ -334,26 +334,21 @@ def test_preserve_prefix_keeps_the_bridge_tools_byte_identical(monkeypatch):
 
 
 def test_eviction_rebuild_restores_the_sessions_saved_tool_order(monkeypatch):
-    """A fresh AIAgent for an EXISTING session must keep the saved tools[] pin.
+    """A fresh AIAgent for an EXISTING session keeps the saved tools[] order for what the
+    fresh build still offers, appends what is new and DROPS what it no longer offers.
 
-    Gateway agent-cache eviction rebuilds the agent; ``agent_init`` re-probes
-    every ``check_fn`` and ``browser_navigate``'s flips false. The persisted
-    name list stands in for the missing predecessor: the tool is carried
-    forward from the registry schema, byte-for-byte in its old slot.
+    Gateway agent-cache eviction rebuilds the agent; the persisted name list stands in for the
+    missing predecessor. A saved tool the rebuild lacks used to be carried forward from the
+    registry schema, so a tool removed from the profile stayed executable in every open
+    conversation (DGX-791). Now it leaves tools[] AND valid_tool_names.
     """
-    from tools import registry as registry_mod
-
-    saved = ["read_file", "browser_navigate", "terminal"]
-    entries = {n: types.SimpleNamespace(name=n, schema=_tool(n)["function"]) for n in saved}
-    monkeypatch.setattr(registry_mod.registry, "get_all_entries", lambda: list(entries.values()), raising=False)
-    monkeypatch.setattr(registry_mod.registry, "get_entry", lambda name, **kw: entries.get(name), raising=False)
-
-    rebuilt = _agent(["read_file", "terminal"])  # probe flipped: browser_navigate gone
+    saved = ["terminal", "browser_exec", "read_file"]
+    rebuilt = _agent(["read_file", "terminal", "web_search"])  # browser_exec no longer offered
     changed = _mcp_agent.restore_agent_tool_prefix(rebuilt, saved)
 
     assert changed is True
-    assert [t["function"]["name"] for t in rebuilt.tools] == saved
-    assert rebuilt.valid_tool_names == set(saved)
+    assert [t["function"]["name"] for t in rebuilt.tools] == ["terminal", "read_file", "web_search"]
+    assert rebuilt.valid_tool_names == {"terminal", "read_file", "web_search"}
 
 
 def test_resume_on_another_surface_restores_the_pinned_tool_bytes(monkeypatch, tmp_path):
