@@ -10,7 +10,8 @@ method = _registry.method
 def _foreign_list(rid, params):
     from hermes_cli.foreign_sessions_browser import list_foreign_sessions
     try:
-        return _ok(rid, list_foreign_sessions(params.get("source"), params.get("offset", 0), params.get("limit", 25)))
+        return _ok(rid, list_foreign_sessions(params.get("source"), params.get("offset", 0), params.get("limit", 25),
+                                              params.get("days")))
     except ValueError as exc:
         return _err(rid, -32602, str(exc))
     except OSError:

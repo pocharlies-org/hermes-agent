@@ -520,6 +520,7 @@ class SessionForeignListParams(ProfileParams):
     source: ForeignSource | None = None
     offset: int | None = None
     limit: int | None = None
+    days: int | None = Field(default=None, ge=1, le=365)
 
 
 class SessionForeignListResult(Result):

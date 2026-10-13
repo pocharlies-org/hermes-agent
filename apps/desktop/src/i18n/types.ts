@@ -318,6 +318,7 @@ export interface Translations {
     connectedComputer: string
     destination: string
     all: string
+    anyTime: string
     search: string
     scanning: string
     scanError: string

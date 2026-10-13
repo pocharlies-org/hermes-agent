@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -191,13 +192,16 @@ def _default_root(source: str) -> Path:
     return Path.home().joinpath(*default_parts)
 
 
-def _walk(source: str, root: Optional[Path] = None) -> List[Tuple[Path, os.stat_result]]:
+def _walk(source: str, root: Optional[Path] = None,
+          max_age_seconds: Optional[float] = None) -> List[Tuple[Path, os.stat_result]]:
     """Regular log files of *source* under *root* (default: the tool's env-aware store, see
     ``_default_root``) as ``(path, stat)``, newest first. Symlinks escaping the root and
     unreadable/rotated entries are skipped, so one bad file never hides the rest. Shared by the
-    CLI picker and the desktop browser."""
+    CLI picker and the desktop browser. *max_age_seconds* drops logs older than the cutoff —
+    the recency filter of the desktop importer, which keeps the parsed page small."""
     pattern, recursive = _SOURCES[source][3], _SOURCES[source][4]
     root = (Path(root) if root else _default_root(source)).resolve()
+    cutoff = None if max_age_seconds is None else time.time() - max_age_seconds
     found: List[Tuple[Path, os.stat_result]] = []
     for path in (root.rglob(pattern) if recursive else root.glob(pattern)) if root.is_dir() else ():
         try:
@@ -205,7 +209,7 @@ def _walk(source: str, root: Optional[Path] = None) -> List[Tuple[Path, os.stat_
             st = resolved.stat()
         except OSError:
             continue
-        if resolved.is_relative_to(root) and S_ISREG(st.st_mode):
+        if resolved.is_relative_to(root) and S_ISREG(st.st_mode) and (cutoff is None or st.st_mtime >= cutoff):
             found.append((resolved, st))
     found.sort(key=lambda item: item[1].st_mtime, reverse=True)
     return found
