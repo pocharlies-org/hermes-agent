@@ -1,5 +1,12 @@
 # Overlay image: the files this branch changes, on top of the live image.
-# Base = the tag in values.yaml of k8s-openclaw-qwen36-pocharlies (deploy/prod) when the overlay was cut.
-ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-f24a9c7-p3426968
+# Base = the tag in values.yaml of k8s-openclaw-qwen36-pocharlies (deploy/prod) when the overlay was cut, pinned by
+# the digest the pods run (kubectl imageID, 11-10) — same pin as the DGX-791 overlay (fork-f24a9c7-pc9eca7d).
+# INFRA-776 r1 merges both sides of the split: api_server.py of overlay/dgx-586-578 (DGX-586/578 + #16,
+# chat_id/thread_id en GET /api/sessions) and the DGX-791 tool-scope trio of c9eca7d
+# (tools/mcp_tool_agent.py, agent/tool_executor.py, tools/code_execution_tool.py).
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-f24a9c7-p3426968@sha256:b85e7e842e23fade9de0acc4b9ebc38461b39d6bb8a2d83106daf9038126fd47
 FROM ${BASE}
 COPY --chmod=664 gateway/platforms/api_server.py /opt/hermes/gateway/platforms/api_server.py
+COPY --chmod=644 tools/mcp_tool_agent.py /opt/hermes/tools/mcp_tool_agent.py
+COPY --chmod=644 agent/tool_executor.py /opt/hermes/agent/tool_executor.py
+COPY --chmod=644 tools/code_execution_tool.py /opt/hermes/tools/code_execution_tool.py
