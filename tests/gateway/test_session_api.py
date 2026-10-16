@@ -1,6 +1,7 @@
 """Focused tests for API server session-control endpoints."""
 
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -227,9 +228,11 @@ async def test_run_agent_registers_active_run_id_for_steering(adapter, monkeypat
 
 @pytest.mark.asyncio
 async def test_session_chat_stream_disconnect_keeps_control_refs_until_executor_finishes(
-    adapter, session_db
+    adapter, session_db, monkeypatch
 ):
-    """Disconnects must interrupt the live run without dropping its control refs early."""
+    """With API_SERVER_SSE_DISCONNECT_INTERRUPTS (upstream behaviour), a disconnect interrupts the
+    live run without dropping its control refs early."""
+    monkeypatch.setenv("API_SERVER_SSE_DISCONNECT_INTERRUPTS", "1")
     session_id = session_db.create_session("disconnect-stream-session", "api_server")
     run_started = threading.Event()
     interrupt_called = threading.Event()
@@ -315,6 +318,92 @@ async def test_session_chat_stream_disconnect_keeps_control_refs_until_executor_
         await handler_task
 
     assert run_id not in adapter._active_run_agents
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_disconnect_lets_the_run_finish_detached(adapter, session_db, monkeypatch):
+    """Default: the turn belongs to the session, not to the socket. A client that goes away (a relay
+    restarting on a rollout) must not interrupt the live run: the handler returns, the run finishes
+    on its own and releases its control refs."""
+    monkeypatch.delenv("API_SERVER_SSE_DISCONNECT_INTERRUPTS", raising=False)
+    session_id = session_db.create_session("detached-stream-session", "api_server")
+    run_started = threading.Event()
+    interrupt_called = threading.Event()
+    allow_finish = threading.Event()
+    finished = threading.Event()
+    write_calls = {"count": 0}
+
+    class FakeAgent:
+        session_prompt_tokens = 0
+        session_completion_tokens = 0
+        session_total_tokens = 0
+
+        def __init__(self, stream_delta_callback):
+            self._stream_delta_callback = stream_delta_callback
+            self.session_id = session_id
+
+        def interrupt(self, _message=None):
+            interrupt_called.set()
+
+        def run_conversation(self, user_message, conversation_history, task_id):
+            del user_message, conversation_history, task_id
+            run_started.set()
+            self._stream_delta_callback("hello")
+            allow_finish.wait(timeout=5)
+            self._stream_delta_callback("after the client left")
+            finished.set()
+            return {"final_response": "done", "session_id": session_id}
+
+    class DisconnectingStreamResponse:
+        async def prepare(self, request):
+            del request
+
+        async def write(self, payload):
+            del payload
+            write_calls["count"] += 1
+            if write_calls["count"] >= 3:
+                raise ConnectionResetError("simulated client disconnect")
+
+    request = MagicMock()
+    request.headers = {}
+    request.match_info = {"session_id": session_id}
+
+    with patch.object(adapter, "_get_existing_session_or_404", return_value=({"id": session_id}, None)), \
+            patch.object(adapter, "_read_json_body", return_value=({"message": "stream please"}, None)), \
+            patch.object(adapter, "_create_agent", side_effect=lambda **kw: FakeAgent(kw["stream_delta_callback"])), \
+            patch("gateway.platforms.api_server.web.StreamResponse", return_value=DisconnectingStreamResponse()):
+        handler_task = asyncio.create_task(adapter._handle_session_chat_stream(request))
+        for _ in range(60):
+            if run_started.is_set():
+                break
+            await asyncio.sleep(0.05)
+        assert run_started.is_set()
+        run_id = next(iter(adapter._run_statuses))
+
+        # The handler gives up on the socket and returns while the run is still alive.
+        await asyncio.wait_for(handler_task, timeout=5)
+        assert not interrupt_called.is_set()
+        assert run_id in adapter._active_run_agents
+        assert not finished.is_set()
+
+        # While the detached run lives, the session is busy: a second turn gets 409 session_busy.
+        assert adapter._session_run_in_flight(session_id)
+        busy = await adapter._handle_session_chat_stream(request)
+        assert busy.status == 409
+        assert json.loads(busy.body)["error"]["code"] == "session_busy"
+        assert len([r for r in adapter._run_statuses.values() if r.get("session_id") == session_id]) == 1
+
+        allow_finish.set()
+        for _ in range(100):
+            if run_id not in adapter._active_run_agents and adapter._run_statuses[run_id]["status"] == "completed":
+                break
+            await asyncio.sleep(0.05)
+        assert not adapter._session_run_in_flight(session_id)
+
+    assert finished.is_set()
+    assert not interrupt_called.is_set()
+    assert run_id not in adapter._active_run_agents
+    assert adapter._run_statuses[run_id]["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -972,3 +1061,202 @@ async def test_patch_session_still_rejects_unknown_fields(adapter, session_db):
         resp = await cli.patch(f"/api/sessions/{session_id}", json={"nonsense": 1})
         assert resp.status == 400, await resp.text()
         assert (await resp.json())["error"]["code"] == "unsupported_session_field"
+
+
+# ---------------------------------------------------------------------------
+# clarify over /chat/stream: ``clarify`` event + POST /clarify/{id} answers it
+# ---------------------------------------------------------------------------
+
+
+def _clarify_app(adapter: APIServerAdapter) -> web.Application:
+    app = _create_session_app(adapter)
+    app.router.add_post(
+        "/api/sessions/{session_id}/clarify/{clarify_id}", adapter._handle_session_clarify)
+    return app
+
+
+def _sse_events(body: str):
+    import json as _json
+
+    out = []
+    for block in body.split("\n\n"):
+        name, data = None, None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = _json.loads(line[len("data: "):])
+        if name:
+            out.append((name, data))
+    return out
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_clarify_event_and_answer(adapter, session_db):
+    """The agent's clarify blocks until the client answers through the clarify route."""
+    session_id = session_db.create_session("clarify-session", "api_server")
+    seen = {}
+
+    async def fake_run(**kwargs):
+        callback = kwargs["clarify_callback"]
+        loop = asyncio.get_running_loop()
+        answer = await loop.run_in_executor(
+            None, lambda: callback("¿Qué motor?", ["Krea2", "Ideogram"], multi_select=False))
+        seen["answer"] = answer
+        return {"final_response": f"Vale, {answer}.", "session_id": session_id, "messages": []}, {}
+
+    app = _clarify_app(adapter)
+    with patch.object(adapter, "_run_agent", side_effect=fake_run):
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(f"/api/sessions/{session_id}/chat/stream", json={"message": "una imagen"})
+            assert resp.status == 200
+            clarify = None
+            buf = ""
+            while clarify is None:
+                chunk = await asyncio.wait_for(resp.content.readany(), timeout=5)
+                assert chunk, buf
+                buf += chunk.decode()
+                for name, data in _sse_events(buf):
+                    if name == "clarify":
+                        clarify = data
+            assert clarify["question"] == "¿Qué motor?"
+            assert clarify["choices"] == ["Krea2", "Ideogram"]
+            assert clarify["multi_select"] is False
+
+            wrong = await cli.post(f"/api/sessions/other/clarify/{clarify['clarify_id']}", json={"response": "x"})
+            assert wrong.status == 404
+            empty = await cli.post(f"/api/sessions/{session_id}/clarify/{clarify['clarify_id']}", json={"response": " "})
+            assert empty.status == 400
+
+            ok = await cli.post(f"/api/sessions/{session_id}/clarify/{clarify['clarify_id']}", json={"response": "Ideogram"})
+            assert ok.status == 200
+            again = await cli.post(f"/api/sessions/{session_id}/clarify/{clarify['clarify_id']}", json={"response": "Krea2"})
+            assert again.status in (404, 409)
+
+            rest = buf + (await asyncio.wait_for(resp.text(), timeout=5))
+
+    assert seen["answer"] == "Ideogram"
+    names = [n for n, _ in _sse_events(rest)]
+    assert names.index("clarify") < names.index("assistant.completed") < names.index("done")
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_tool_results_are_opt_in(adapter, session_db):
+    session_id = session_db.create_session("tool-result-session", "api_server")
+
+    async def fake_run(**kwargs):
+        progress = kwargs["tool_progress_callback"]
+        progress("tool.started", "studio_generate_image", "krea2", {"prompt": "a cat"})
+        progress("tool.completed", "studio_generate_image", None, None,
+                 duration=1.0, is_error=False, result='{"id": "cr-1", "status": "queued"}')
+        return {"final_response": "ok", "session_id": session_id, "messages": []}, {}
+
+    app = _create_session_app(adapter)
+    with patch.object(adapter, "_run_agent", side_effect=fake_run):
+        async with TestClient(TestServer(app)) as cli:
+            plain = await (await cli.post(f"/api/sessions/{session_id}/chat/stream", json={"message": "a"})).text()
+            rich = await (await cli.post(
+                f"/api/sessions/{session_id}/chat/stream",
+                json={"message": "a", "include_tool_results": True})).text()
+
+    plain_done = [d for n, d in _sse_events(plain) if n == "tool.completed"][0]
+    rich_done = [d for n, d in _sse_events(rich) if n == "tool.completed"][0]
+    assert "result" not in plain_done
+    assert rich_done["result"] == '{"id": "cr-1", "status": "queued"}'
+    assert rich_done["is_error"] is False
+
+
+# ---------------------------------------------------------------------------
+# /chat/stream: reasoning deltas, status notices and the runtime (provider/model, fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_chat_stream_reasoning_status_and_runtime(adapter, session_db):
+    """The web sees the reasoning as it streams, lifecycle notices and which model runs (and a fallback)."""
+    from types import SimpleNamespace
+
+    session_id = session_db.create_session("reasoning-session", "api_server")
+
+    async def fake_run(**kwargs):
+        agent = SimpleNamespace(provider="custom", model="qwen38-flash-next", _fallback_activated=False,
+                                _hermes_api_runtime={"route_source": "global"})
+        kwargs["runtime_callback"](agent)
+        kwargs["reasoning_callback"]("Pienso")
+        kwargs["reasoning_callback"](" un poco.")
+        agent.provider, agent.model, agent._fallback_activated = "litellm-alibaba", "alibaba-q38-flash", True
+        kwargs["status_callback"]("lifecycle", "Primario caído: paso al fallback")
+        kwargs["stream_delta_callback"]("Hola")
+        return {"final_response": "Hola", "session_id": session_id, "messages": []}, {}
+
+    app = _create_session_app(adapter)
+    with patch.object(adapter, "_run_agent", side_effect=fake_run):
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(f"/api/sessions/{session_id}/chat/stream", json={"message": "hola"})
+            assert resp.status == 200
+            events = _sse_events(await asyncio.wait_for(resp.text(), timeout=5))
+
+    names = [n for n, _ in events]
+    runtimes = [d for n, d in events if n == "runtime"]
+    assert [(r["provider"], r["model"], r["fallback"]) for r in runtimes] == [
+        ("custom", "qwen38-flash-next", False), ("litellm-alibaba", "alibaba-q38-flash", True)]
+    assert "".join(d["delta"] for n, d in events if n == "reasoning.delta") == "Pienso un poco."
+    assert [d["message"] for n, d in events if n == "status"] == ["Primario caído: paso al fallback"]
+    assert names.index("runtime") < names.index("reasoning.delta") < names.index("assistant.delta") < names.index("done")
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_archived_switch(adapter, session_db):
+    """GET /api/sessions?archived=exclude|only|include: archived rows stay out by default, are the
+    only ones with `only`, and come with the rest with `include`; anything else is a 400."""
+    live = session_db.create_session("live-one", "api_server")
+    gone = session_db.create_session("archived-one", "webhook")
+    session_db.set_session_archived(gone, True)
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        async def ids(query: str) -> set:
+            resp = await cli.get("/api/sessions" + query)
+            assert resp.status == 200
+            return {row["id"] for row in (await resp.json())["data"]}
+
+        assert await ids("") == {live}
+        assert await ids("?archived=exclude") == {live}
+        assert await ids("?archived=only") == {gone}
+        assert await ids("?archived=include") == {live, gone}
+        bad = await cli.get("/api/sessions?archived=yes")
+        assert bad.status == 400
+
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_carries_telegram_topic_fields(adapter, session_db):
+    """GET /api/sessions?source=telegram adds chat_id and thread_id per row (INFRA-776): the bound
+    topic's pair on a linked session, both null on a Telegram session with no topic and on a session
+    of another source. The fields already there keep their names and shapes."""
+    linked = session_db.create_session(
+        "topic-linked", "telegram", chat_id="67890", thread_id="topic-42")
+    unlinked = session_db.create_session("topic-lobby", "telegram")
+    other = session_db.create_session("api-row", "api_server")
+    session_db.enable_telegram_topic_mode(chat_id="67890", user_id="12345")
+    session_db.bind_telegram_topic(
+        chat_id="67890", thread_id="topic-42", user_id="12345",
+        session_key="tg:67890:topic-42", session_id=linked,
+    )
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.get("/api/sessions?source=telegram")
+        assert resp.status == 200
+        rows = {row["id"]: row for row in (await resp.json())["data"]}
+
+        other_resp = await cli.get("/api/sessions?source=api_server")
+        assert other_resp.status == 200
+        other_rows = {row["id"]: row for row in (await other_resp.json())["data"]}
+
+    assert (rows[linked]["chat_id"], rows[linked]["thread_id"]) == ("67890", "topic-42")
+    assert rows[unlinked]["chat_id"] is None and rows[unlinked]["thread_id"] is None
+    assert other_rows[other]["chat_id"] is None and other_rows[other]["thread_id"] is None
+    # Additive: the pre-existing keys of a listing row are untouched.
+    assert {"id", "source", "last_active", "archived"} <= set(rows[linked])
+    assert rows[linked]["source"] == "telegram"

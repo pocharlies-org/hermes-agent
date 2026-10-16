@@ -3470,6 +3470,50 @@ class TestProbeGatewayHealth:
         assert call_count[0] == 2
 
 
+    def test_detailed_probe_sends_api_server_key(self, monkeypatch):
+        """/health/detailed is Bearer-gated: the probe sends API_SERVER_KEY there and nowhere else."""
+        import hermes_cli.web_server as ws
+        import hermes_cli.config as cfg
+        monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://127.0.0.1:8642/health")
+        monkeypatch.setattr(ws, "_GATEWAY_HEALTH_TIMEOUT", 1)
+        monkeypatch.setattr(cfg, "get_env_value_prefer_dotenv",
+                            lambda key: "k-123" if key == "API_SERVER_KEY" else None)
+        seen = []
+
+        def mock_urlopen(req, **kwargs):
+            seen.append((req.full_url, req.get_header("Authorization")))
+            if req.full_url.endswith("/detailed"):
+                raise ConnectionError("detailed failed")
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.read.return_value = json.dumps({"status": "ok"}).encode()
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        monkeypatch.setattr(ws.urllib.request, "urlopen", mock_urlopen)
+        alive, _ = _web_server_gateway._probe_gateway_health()
+        assert alive is True
+        assert seen == [("http://127.0.0.1:8642/health/detailed", "Bearer k-123"),
+                        ("http://127.0.0.1:8642/health", None)]
+
+    def test_detailed_probe_without_key_sends_no_header(self, monkeypatch):
+        import hermes_cli.web_server as ws
+        import hermes_cli.config as cfg
+        monkeypatch.setattr(ws, "_GATEWAY_HEALTH_URL", "http://gw:8642")
+        monkeypatch.setattr(ws, "_GATEWAY_HEALTH_TIMEOUT", 1)
+        monkeypatch.setattr(cfg, "get_env_value_prefer_dotenv", lambda key: None)
+        seen = []
+
+        def mock_urlopen(req, **kwargs):
+            seen.append(req.get_header("Authorization"))
+            raise ConnectionError("down")
+
+        monkeypatch.setattr(ws.urllib.request, "urlopen", mock_urlopen)
+        assert _web_server_gateway._probe_gateway_health() == (False, None)
+        assert seen == [None, None]
+
+
 class TestStatusRemoteGateway:
     """Tests for /api/status with remote gateway health fallback."""
 

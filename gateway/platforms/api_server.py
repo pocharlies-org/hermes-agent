@@ -69,6 +69,7 @@ _STATIC_FEATURE_FLAGS = {
     "run_approval_response": True, "tool_progress_events": True, "approval_events": True,
     "session_resources": True, "model_options": True, "session_chat": True,
     "session_chat_streaming": True, "session_fork": True, "session_model_lock": True,
+    "session_clarify": True,
     "admin_config_rw": False, "jobs_admin": False, "memory_write_api": False,
     "skills_api": True, "audio_api": False, "realtime_voice": False,
     "session_continuity_header": "X-Hermes-Session-Id",
@@ -94,6 +95,7 @@ _CAPABILITY_ENDPOINTS = (
     ("session_chat", ("POST", "/api/sessions/{session_id}/chat")),
     ("session_chat_stream", ("POST", "/api/sessions/{session_id}/chat/stream")),
     ("session_model_lock", ("POST", "/api/sessions/{session_id}/model")),
+    ("session_clarify", ("POST", "/api/sessions/{session_id}/clarify/{clarify_id}")),
     ("browser_control_register", ("POST", "/v1/browser-control/register")),
     ("browser_control_ws", ("GET", "/v1/browser-control/ws")),
     ("artifact_upload", ("POST", "/v1/artifacts/upload")),
@@ -1056,6 +1058,35 @@ class _ProviderAuthResolutionError(RuntimeError):
     RuntimeErrors from run_conversation() (e.g. a closed OpenAI client) as auth failures."""
 
 
+_SESSION_TOOL_RESULT_MAX_CHARS = 8000
+
+
+def _session_tool_result_text(result: Any) -> str:
+    """A tool result as text for the opt-in ``result`` field of session SSE tool events."""
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+    if len(text) > _SESSION_TOOL_RESULT_MAX_CHARS:
+        text = text[:_SESSION_TOOL_RESULT_MAX_CHARS] + "…[truncated]"
+    return text
+
+
+def _session_clarify_key(session_id: str, run_id: str) -> str:
+    """clarify_gateway session key of one /chat/stream run. Namespaced so it never collides
+    with a messaging platform's session key (their text intercept must not see these)."""
+    return f"api_server:{session_id}:{run_id}"
+
+
+def _sse_disconnect_interrupts() -> bool:
+    """Upstream behaviour (interrupt the live run when the session SSE client goes away) only when
+    ``API_SERVER_SSE_DISCONNECT_INTERRUPTS`` is truthy. Default: the run continues detached."""
+    return os.environ.get("API_SERVER_SSE_DISCONNECT_INTERRUPTS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _clear_session_clarify(session_key: str) -> None:
+    with suppress(Exception):
+        from tools import clarify_gateway as clarify_mod
+        clarify_mod.clear_session(session_key)
+
+
 class _SessionEventQueue:
     """Ordered SSE event queue for one /api/sessions/{id}/chat/stream run. ``payload`` stamps
     session_id/run_id/seq/ts; ``enqueue`` is executor-thread safe (hops onto the owning loop)."""
@@ -1268,6 +1299,35 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         except Exception:
             return default
         return max(0, value)
+
+    # Headroom over the run cap for everything else that uses the loop's default executor: the
+    # ``to_thread`` session-DB reads, auth verification, cron fires, other platforms' turns.
+    _EXECUTOR_HEADROOM = 64
+
+    def _ensure_default_executor_capacity(self) -> None:
+        """Size the loop's default executor for the run cap (DGX-586).
+
+        Agent turns run on it (``run_in_executor(None, …)`` in /v1/runs and ``_run_agent``) next to
+        the short ``to_thread`` session-DB reads. The stock pool is ``min(32, cpu + 4)`` — 12 threads
+        on 8 cores — so with a cap of 200 and slow turns, 12 turns in flight left ``GET
+        /api/sessions`` queued behind them for minutes and every dashboard Despacho timed out. Never
+        shrinks a pool that is already big enough. ``HERMES_EXECUTOR_WORKERS`` overrides the size.
+        """
+        try:
+            workers = int(os.getenv("HERMES_EXECUTOR_WORKERS", "0") or 0)
+        except ValueError:
+            workers = 0
+        if workers <= 0:
+            cap = self._max_concurrent_runs or 200  # 0 = uncapped: size for a busy gateway
+            workers = cap + self._EXECUTOR_HEADROOM
+        loop = asyncio.get_running_loop()
+        current = getattr(loop, "_default_executor", None)
+        if getattr(current, "_max_workers", 0) >= workers:
+            return
+        loop.set_default_executor(
+            concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="hermes-exec"))
+        logger.info("[%s] default executor sized to %d workers (run cap %d)",
+                    self.name, workers, self._max_concurrent_runs)
 
     @staticmethod
     def _resolve_model_name(explicit: str) -> str:
@@ -1548,6 +1608,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             ("POST", "/api/sessions/{session_id}/chat", self._handle_session_chat),
             ("POST", "/api/sessions/{session_id}/chat/stream", self._handle_session_chat_stream),
             ("POST", "/api/sessions/{session_id}/model", self._handle_session_model_lock),
+            ("POST", "/api/sessions/{session_id}/clarify/{clarify_id}", self._handle_session_clarify),
             ("POST", "/v1/chat/completions", self._handle_chat_completions),
             ("POST", "/v1/responses", self._handle_responses),
             ("GET", "/v1/responses/{response_id}", self._handle_get_response),
@@ -2061,6 +2122,12 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         session_key = gateway_session_key or session_id
         session_row_model = _clean_request_string(session_model)
         current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+        # A named ``providers:`` entry resolves to the bare runtime provider "custom"; re-resolving
+        # "custom" drops that identity (falls to OpenRouter with no key -> "No LLM provider
+        # configured" on every resumed session). Re-resolve by the configured name instead.
+        if current_provider == "custom":
+            current_provider = (
+                _clean_request_string(runtime_kwargs.get("requested_provider")) or current_provider)
         session_override = None if confirmed_runtime_lock else self._session_model_override_for(session_key)
         # Model-string precedence (override > session-persisted > global) is owned by
         # hermes_cli.model_switch.resolve_effective_model.
@@ -2717,6 +2784,21 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         payload["has_model_config"] = bool(session.get("model_config"))
         return payload
 
+    def _session_rows_with_topic(self, db: Any, sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Listing rows plus the Telegram topic each one is bound to: ``chat_id`` and ``thread_id``,
+        both None when the row has no topic or is not a Telegram session. Additive: the fields of
+        ``_session_response`` are unchanged. Reads the binding through ``db``'s reverse lookup, so it
+        runs off-loop (the caller wraps it in ``asyncio.to_thread``)."""
+        rows = []
+        for session in sessions:
+            row = self._session_response(session)
+            binding = (db.get_telegram_topic_binding_by_session(session_id=session["id"])
+                       if session.get("source") == "telegram" else None)
+            row["chat_id"] = binding["chat_id"] if binding else None
+            row["thread_id"] = binding["thread_id"] if binding else None
+            rows.append(row)
+        return rows
+
     @staticmethod
     def _message_response(message: Dict[str, Any]) -> Dict[str, Any]:
         message = _project_client_message(message)
@@ -2769,14 +2851,24 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         title_filter = (request.query.get("title") or "").strip() or None
         include_hidden = bool(title_filter) and _coerce_request_bool(
             request.query.get("include_hidden"), default=False)
+        # archived=exclude|only|include — the same switch the web dashboard's GET /api/sessions has
+        # (web_routers/sessions.py), so an api_server client can list archived sessions and unarchive
+        # them with the PATCH it already has. Default unchanged: archived rows stay out.
+        archived = (request.query.get("archived") or "exclude").strip().lower()
+        if archived not in ("exclude", "only", "include"):
+            return _error_response("archived must be one of: exclude, only, include", 400,
+                                   code="invalid_archived")
 
         async def _list() -> list:
             # include_pinned back-fills pins past the recency window; search_query pushes the
             # title needle into SQL (substring) so a hidden/old row is found, exact match below.
+            # An archived-only page does not back-fill pins: they are live rows.
             rows = await asyncio.to_thread(
                 db.list_sessions_rich, source=source, limit=limit, offset=offset,
-                include_children=include_children, order_by_last_active=True, include_pinned=True,
-                search_query=title_filter, include_hidden=include_hidden)
+                include_children=include_children, order_by_last_active=True,
+                include_pinned=archived != "only", search_query=title_filter,
+                include_hidden=include_hidden, include_archived=archived == "include",
+                archived_only=archived == "only")
             if title_filter:
                 rows = [s for s in rows if (s.get("title") or "").strip() == title_filter]
             return rows
@@ -2799,8 +2891,9 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         # Back-filled pins arrive PAST the limit, so counting them would report
         # another page that doesn't exist. Only the recency window decides.
         windowed = sum(1 for s in sessions if not s.get("pinned"))
+        data = await asyncio.to_thread(self._session_rows_with_topic, db, sessions)
         return web.json_response({
-            "object": "list", "data": [self._session_response(s) for s in sessions],
+            "object": "list", "data": data,
             "limit": limit, "offset": offset, "has_more": windowed >= limit})
 
     @_require_auth
@@ -3148,6 +3241,12 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             requested_runtime=runtime_request.get("requested"),
             route_source=runtime_request.get("route_source") or "global",
             model_lock=("accepted" if ctx["lock_active"] else ""))
+        # One live turn per session. A turn now outlives its SSE client (see the disconnect branch
+        # below), so a second POST to a busy session — a relay that restarted, a client retry —
+        # would start a second agent on the same transcript. Checked and claimed (status "queued")
+        # with no await in between.
+        if self._session_run_in_flight(session_id):
+            return _error_response("session has a turn in flight", 409, code="session_busy")
         message_id = f"msg_{uuid.uuid4().hex}"
         run_id = f"run_{uuid.uuid4().hex}"
         events = _SessionEventQueue(session_id, run_id)
@@ -3159,15 +3258,78 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         self._set_run_status(
             run_id, "queued", session_id=session_id, model=ctx["body"].get("model", self._model_name))
 
+        def _reasoning(text: str) -> None:
+            _emit_runtime(agent_holder[0])
+            if text:
+                events.enqueue("reasoning.delta", {"message_id": message_id, "delta": text})
+
+        runtime_seen: Dict[str, str] = {}
+        agent_holder: list = [None]
+
+        def _emit_runtime(agent: Any) -> None:
+            """``runtime`` event when the provider/model the turn runs on is known or changes (fallback)."""
+            if agent is None:
+                return
+            base = getattr(agent, "_hermes_api_runtime", None) or {}
+            now = {"provider": str(getattr(agent, "provider", "") or base.get("provider") or ""),
+                   "model": str(getattr(agent, "model", "") or base.get("model") or ""),
+                   "route_source": str(base.get("route_source") or "global"),
+                   "fallback": bool(getattr(agent, "_fallback_activated", False))}
+            if now != runtime_seen:
+                runtime_seen.clear()
+                runtime_seen.update(now)
+                events.enqueue("runtime", {"message_id": message_id, **now})
+
+        def _runtime_ready(agent: Any) -> None:
+            agent_holder[0] = agent
+            _emit_runtime(agent)
+
+        def _status(kind: str, message: str = "", **_kw: Any) -> None:
+            if message:
+                events.enqueue("status", {"message_id": message_id, "kind": str(kind or ""), "message": str(message)})
+            _emit_runtime(agent_holder[0])
+
         def _delta(delta: str) -> None:
+            _emit_runtime(agent_holder[0])
             if delta:
                 events.enqueue("assistant.delta", {"message_id": message_id, "delta": delta})
 
+        # Opt-in: tool.completed/tool.failed also carry the (truncated) tool result, so a client
+        # can render what a tool produced (a job id, an image URL) without re-reading the transcript.
+        include_tool_results = ctx["body"].get("include_tool_results") is True
+
         def _tool_progress(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs) -> None:
+            _emit_runtime(agent_holder[0])
             if event_type == "reasoning.available":
                 events.enqueue("tool.progress", {"message_id": message_id, "tool_name": tool_name or "_thinking", "delta": preview or ""})
             elif event_type in {"tool.started", "tool.completed", "tool.failed"}:
-                events.enqueue(event_type, {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args})
+                payload = {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args}
+                if include_tool_results and event_type != "tool.started" and kwargs.get("result") is not None:
+                    payload["result"] = _session_tool_result_text(kwargs["result"])
+                    payload["is_error"] = bool(kwargs.get("is_error"))
+                events.enqueue(event_type, payload)
+
+        clarify_session_key = _session_clarify_key(session_id, run_id)
+
+        def _clarify(question: str, choices=None, multi_select: bool = False) -> str:
+            """clarify_tool's synchronous contract over SSE: emit ``clarify`` and block the agent
+            thread until POST /api/sessions/{id}/clarify/{clarify_id} answers or the timeout."""
+            from tools import clarify_gateway as clarify_mod
+            clarify_id = uuid.uuid4().hex[:10]
+            choices = list(choices) if choices else None
+            clarify_mod.register(
+                clarify_id=clarify_id, session_key=clarify_session_key, question=question,
+                choices=choices, multi_select=bool(multi_select))
+            events.enqueue("clarify", {
+                "message_id": message_id, "clarify_id": clarify_id, "question": question,
+                "choices": choices or [], "multi_select": bool(multi_select and choices)})
+            self._set_run_status(run_id, "waiting_for_clarify", last_event="clarify")
+            timeout = clarify_mod.get_clarify_timeout()
+            response = clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
+            self._set_run_status(run_id, "running", last_event="clarify.resolved")
+            if response is None or response == "":
+                return f"[user did not respond within {int(timeout / 60)}m]"
+            return response
 
         async def _run_and_signal() -> None:
             try:
@@ -3179,7 +3341,9 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 history = await self._conversation_history_for_session(session_id)
                 result, usage = await self._run_agent(
                     conversation_history=history, stream_delta_callback=_delta,
-                    tool_progress_callback=_tool_progress, active_run_id=run_id, **ctx["run_kwargs"])
+                    tool_progress_callback=_tool_progress, clarify_callback=_clarify,
+                    reasoning_callback=_reasoning, status_callback=_status, runtime_callback=_runtime_ready,
+                    active_run_id=run_id, **ctx["run_kwargs"])
                 is_dict = isinstance(result, dict)
                 final_response = _resolve_media_to_data_urls(result.get("final_response", "") if is_dict else "")
                 effective_session_id = result.get("session_id", session_id) if is_dict else session_id
@@ -3237,10 +3401,22 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 name, payload = item
                 await response.write(_sse_frame(payload, event=name, ensure_ascii=False))
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
-            await self._drain_session_stream_task_on_disconnect(
-                run_id, task, interrupt_message="SSE client disconnected", shield_wait=False)
-            logger.info("Session SSE client disconnected; interrupted live run %s", run_id)
+            # A pending clarify would pin the agent thread until its timeout: nobody can answer it now.
+            _clear_session_clarify(clarify_session_key)
+            if _sse_disconnect_interrupts():
+                await self._drain_session_stream_task_on_disconnect(
+                    run_id, task, interrupt_message="SSE client disconnected", shield_wait=False)
+                logger.info("Session SSE client disconnected; interrupted live run %s", run_id)
+            else:
+                # The turn belongs to the session, not to the socket: a relay that restarts (a
+                # dashboard rollout) or a client that walks away must not kill a live run. It keeps
+                # running as a tracked background task, persists to the session as usual, and its
+                # remaining events go to an unbounded queue nobody reads. While it lives the session
+                # answers 409 session_busy. Server shutdown waits for it through the in-flight agent
+                # count (_inflight_agent_runs -> active_agent_work_count), not through this handler.
+                logger.info("Session SSE client disconnected; live run %s continues detached", run_id)
         except asyncio.CancelledError:
+            _clear_session_clarify(clarify_session_key)
             await self._drain_session_stream_task_on_disconnect(
                 run_id, task, interrupt_message="SSE task cancelled", shield_wait=True)
             logger.info("Session SSE task cancelled; drained live run %s", run_id)
@@ -3248,6 +3424,42 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         except Exception as exc:
             logger.debug("[api_server] session SSE stream error: %s", exc)
         return response
+
+    @_require_auth
+    async def _handle_session_clarify(self, request: "web.Request") -> "web.Response":
+        """POST /api/sessions/{session_id}/clarify/{clarify_id} — answer a ``clarify`` event of a
+        live /chat/stream run. Body ``{"response": "<choice text or free answer>"}``; a
+        multi-select answer may be a list of strings (sent to the agent as JSON)."""
+        session_id = request.match_info["session_id"]
+        clarify_id = request.match_info["clarify_id"]
+        _, err = await self._get_existing_session_or_404(session_id)
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        answer = body.get("response")
+        if isinstance(answer, list) and all(isinstance(a, str) for a in answer):
+            answer = json.dumps(answer, ensure_ascii=False)
+        if not isinstance(answer, str) or not answer.strip():
+            return _error_response("response must be a non-empty string", 400, code="invalid_clarify_response")
+        from tools import clarify_gateway as clarify_mod
+        with clarify_mod._lock:
+            entry = clarify_mod._entries.get(clarify_id)
+            owned = entry is not None and entry.session_key.startswith(_session_clarify_key(session_id, ""))
+        if not owned:
+            return _error_response("No pending clarify with that id in this session", 404, code="clarify_not_found")
+        if not clarify_mod.resolve_gateway_clarify(clarify_id, answer.strip()):
+            return _error_response("Clarify already answered or expired", 409, code="clarify_not_pending")
+        return web.json_response({"ok": True, "session_id": session_id, "clarify_id": clarify_id})
+
+    _SESSION_RUN_LIVE_STATUSES = frozenset({"queued", "running", "waiting_for_clarify", "waiting_for_approval", "stopping"})
+
+    def _session_run_in_flight(self, session_id: str) -> bool:
+        """True while a run of ``session_id`` is not terminal (in-memory, like _run_statuses)."""
+        return any(
+            st.get("session_id") == session_id and st.get("status") in self._SESSION_RUN_LIVE_STATUSES
+            for st in list(self._run_statuses.values()))
 
     async def _drain_session_stream_task_on_disconnect(
         self, run_id: str, task: "asyncio.Task", *, interrupt_message: str, shield_wait: bool
@@ -3673,7 +3885,8 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         requested_runtime: Optional[Dict[str, Any]] = None, route_source: str = "global",
         confirmed_runtime_lock: bool = False, bind_declared_conversation: bool = False,
         session_history_delivery: str = "", turn_author: Optional[Dict[str, Any]] = None,
-        relay_metadata: Optional[Dict[str, Any]] = None) -> tuple:
+        relay_metadata: Optional[Dict[str, Any]] = None, clarify_callback=None,
+        reasoning_callback=None, status_callback=None, runtime_callback=None) -> tuple:
         """Create an agent and run one turn in a thread executor -> ``(result, usage)``.
         ``agent_ref[0]`` receives the agent so SSE writers can interrupt it; ``active_run_id``
         registers it in ``_active_run_agents``. Under a confirmed model lock the actual
@@ -3706,6 +3919,21 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                         gateway_session_key=gateway_session_key, requested_model=requested_model,
                         requested_provider=requested_provider, model_options=model_options, route=route,
                         session_model=session_model, confirmed_runtime_lock=confirmed_runtime_lock)
+                    if clarify_callback is not None:
+                        # Without it clarify_tool answers "not available in this execution context".
+                        agent.clarify_callback = clarify_callback
+                    # Session SSE only: the model's reasoning as it streams, lifecycle/fallback notices, and
+                    # the runtime (provider/model) the turn actually starts on — a web client can show what
+                    # the agent is doing and on which model instead of a silent spinner.
+                    if reasoning_callback is not None:
+                        agent.reasoning_callback = reasoning_callback
+                    if status_callback is not None:
+                        agent.status_callback = status_callback
+                    if runtime_callback is not None:
+                        try:
+                            runtime_callback(agent)
+                        except Exception:  # noqa: BLE001 - display-only
+                            logger.debug("[api_server] runtime_callback failed", exc_info=True)
                     if agent_ref is not None:
                         agent_ref[0] = agent
                     if active_run_id:
@@ -3898,6 +4126,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                 "`/platform resume api_server`.",
                 retryable=False)
             return False
+        self._ensure_default_executor_capacity()
         try:
             mws = [mw for mw in (
                 self._make_profile_prefix_middleware(), cors_middleware, body_limit_middleware,

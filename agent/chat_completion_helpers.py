@@ -1365,20 +1365,24 @@ def _build_chat_completions_kwargs(agent, api_messages, tools_for_api, reasoning
 def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = None) -> dict:
     """Build the keyword arguments dict for the active API mode.
 
-    Wraps the per-api_mode builder so the OpenCode ``x-opencode-session``
-    affinity header rides on every OpenCode request regardless of transport
-    (chat_completions / codex_responses / anthropic_messages all route
-    OpenCode models). No-op for every other provider.
+    Wraps the per-api_mode builder so the per-request headers ride on every
+    request regardless of transport (chat_completions / codex_responses /
+    anthropic_messages): the OpenCode ``x-opencode-session`` affinity header on
+    OpenCode targets, and ``x-litellm-session-id`` on LiteLLM targets.
     """
+    from agent.litellm_session_header import merge_litellm_session_header
     from agent.opencode_affinity import merge_opencode_session_headers
 
     kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
-    return merge_opencode_session_headers(
+    kwargs = merge_opencode_session_headers(
         kwargs,
         getattr(agent, "provider", None),
         getattr(agent, "base_url", None),
         getattr(agent, "session_id", None),
     )
+    # DGX-578: the session that launched the request, for LiteLLM's trace_id.
+    return merge_litellm_session_header(
+        kwargs, getattr(agent, "base_url", None), getattr(agent, "session_id", None))
 
 
 def _build_api_kwargs_for_mode(agent, api_messages: list, tools_for_api: list | None = None) -> dict:
