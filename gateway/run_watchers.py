@@ -72,6 +72,12 @@ class GatewaySessionWatchersMixin:
                     logger.info("SessionStore prune: dropped %d stale entries", n)
             except Exception as e:
                 logger.debug("SessionStore prune failed: %s", e)
+            try:
+                from hermes_cli.profiles import profile_exists
+                await self._run_in_executor_with_context(
+                    self.session_store.prune_entries_for_missing_profiles, profile_exists)
+            except Exception as e:
+                logger.debug("SessionStore prune of retired profiles failed: %s", e)
             self._last_session_store_prune_ts = time.time()
 
     def _session_stall_timeout_seconds(self) -> float:
