@@ -1,0 +1,25 @@
+# Overlay image: the files this branch changes, on top of the live image.
+# Rebase DGX-1062: base = upstream v0.22.2 (docker.io release tag, immutable). The COPY list is the
+# union of runtime files of deploy/v0.22.2-reasoning-picker @ 51d9183 vs v0.22.2:
+# - reasoning picker (PR #119110, still open upstream): agent/reasoning_effort.py,
+#   gateway/slash_commands_model.py, agent/transports/chat_completions.py, locales/{en,es}.yaml
+# - DGX-578: agent/litellm_session_header.py, agent/chat_completion_helpers.py,
+#   gateway/platforms/api_server.py (pool + x-litellm-session-id)
+# - INFRA-776: gateway/platforms/api_server.py (chat_id/thread_id en /api/sessions)
+# - INFRA-697: gateway/platforms/webhook.py (rate_limit por ruta)
+# - DGX-791: agent/tool_executor.py, tools/mcp_tool_agent.py, tools/code_execution_tool.py
+# In the base these are the upstream v0.22.2 files (d923a5e); nothing here was overlaid before.
+ARG BASE=docker.io/nousresearch/hermes-agent:v0.22.2
+FROM ${BASE}
+COPY --chmod=644 agent/reasoning_effort.py /opt/hermes/agent/reasoning_effort.py
+COPY --chmod=644 agent/transports/chat_completions.py /opt/hermes/agent/transports/chat_completions.py
+COPY --chmod=644 agent/chat_completion_helpers.py /opt/hermes/agent/chat_completion_helpers.py
+COPY --chmod=644 agent/litellm_session_header.py /opt/hermes/agent/litellm_session_header.py
+COPY --chmod=644 agent/tool_executor.py /opt/hermes/agent/tool_executor.py
+COPY --chmod=664 gateway/platforms/api_server.py /opt/hermes/gateway/platforms/api_server.py
+COPY --chmod=644 gateway/platforms/webhook.py /opt/hermes/gateway/platforms/webhook.py
+COPY --chmod=644 gateway/slash_commands_model.py /opt/hermes/gateway/slash_commands_model.py
+COPY --chmod=644 tools/mcp_tool_agent.py /opt/hermes/tools/mcp_tool_agent.py
+COPY --chmod=644 tools/code_execution_tool.py /opt/hermes/tools/code_execution_tool.py
+COPY --chmod=644 locales/en.yaml /opt/hermes/locales/en.yaml
+COPY --chmod=644 locales/es.yaml /opt/hermes/locales/es.yaml
