@@ -767,7 +767,7 @@ class GatewayModelCommandsMixin:
             _session_model or _model_cfg.get("default") or _model_cfg.get("model"),
             get_current_runtime({"model": _model_cfg}),
         )
-        _declared = declared_route_efforts(*_route, config=_cfg)
+        _declared = declared_route_efforts(*_route[:2], config=_cfg)
         if raw_args:  # typed path — same applier the picker uses
             _asked = str(args or "").strip().lower()
             # A level the route does not declare is refused with the levels it does take.
