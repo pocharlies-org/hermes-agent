@@ -1396,3 +1396,36 @@ async def test_interim_commentary_reaches_session_sse_and_responses_stream(adapt
     monkeypatch.setattr("run_agent.AIAgent", CapturingAgent)
     adapter._create_agent(session_id="gated", interim_assistant_callback=lambda *_a, **_k: None)
     assert captured["interim_assistant_callback"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_carries_telegram_topic_fields(adapter, session_db):
+    """GET /api/sessions?source=telegram adds chat_id and thread_id per row (INFRA-776): the bound
+    topic's pair on a linked session, both null on a Telegram session with no topic and on a session
+    of another source. The fields already there keep their names and shapes."""
+    linked = session_db.create_session(
+        "topic-linked", "telegram", chat_id="67890", thread_id="topic-42")
+    unlinked = session_db.create_session("topic-lobby", "telegram")
+    other = session_db.create_session("api-row", "api_server")
+    session_db.enable_telegram_topic_mode(chat_id="67890", user_id="12345")
+    session_db.bind_telegram_topic(
+        chat_id="67890", thread_id="topic-42", user_id="12345",
+        session_key="tg:67890:topic-42", session_id=linked,
+    )
+
+    app = _create_session_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.get("/api/sessions?source=telegram")
+        assert resp.status == 200
+        rows = {row["id"]: row for row in (await resp.json())["data"]}
+
+        other_resp = await cli.get("/api/sessions?source=api_server")
+        assert other_resp.status == 200
+        other_rows = {row["id"]: row for row in (await other_resp.json())["data"]}
+
+    assert (rows[linked]["chat_id"], rows[linked]["thread_id"]) == ("67890", "topic-42")
+    assert rows[unlinked]["chat_id"] is None and rows[unlinked]["thread_id"] is None
+    assert other_rows[other]["chat_id"] is None and other_rows[other]["thread_id"] is None
+    # Additive: the pre-existing keys of a listing row are untouched.
+    assert {"id", "source", "last_active", "archived"} <= set(rows[linked])
+    assert rows[linked]["source"] == "telegram"
