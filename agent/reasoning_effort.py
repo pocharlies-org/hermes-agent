@@ -238,6 +238,10 @@ def declared_route_efforts(
     return tuple(level for level in levels if level in EFFORT_LADDER)
 
 
+def effort_display_label(
+    effort: Optional[str], provider: Optional[str] = None, model: Optional[str] = None,
+    api_mode: Optional[str] = None,
+) -> str:
     """Picker / ``/reasoning`` status label for a ladder level: the level itself when the route sends
     it verbatim, else ``"<level> (sends <clamped> on this route)"`` so a Hermes-internal step such as
     ``ultra`` (#61634) is never presented as a distinct wire level the route does not have."""
