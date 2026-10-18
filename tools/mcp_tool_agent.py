@@ -210,6 +210,8 @@ def restore_agent_tool_prefix(agent, saved) -> bool:
     Pinned by other code (``hermes update``, a legacy name list) a tool's contract may have moved,
     so each takes its current definition. A pinned tool this process did not build is carried
     only while its toolset config allows it here; deregistered tools drop, new tools append."""
+    from tools.registry import registry
+
     pinned, version = (saved.get("tools") or [], saved.get("version")) if isinstance(saved, dict) else (saved, None)
     if not pinned:
         return False
