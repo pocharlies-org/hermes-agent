@@ -1401,8 +1401,10 @@ async def test_interim_commentary_reaches_session_sse_and_responses_stream(adapt
 @pytest.mark.asyncio
 async def test_list_sessions_carries_telegram_topic_fields(adapter, session_db):
     """GET /api/sessions?source=telegram adds chat_id and thread_id per row (INFRA-776): the bound
-    topic's pair on a linked session, both null on a Telegram session with no topic and on a session
-    of another source. The fields already there keep their names and shapes."""
+    topic's pair on a linked session (the binding wins over the row's own pair, INFRA-439), the
+    row's own pair on a Telegram session with no binding (group topics, INFRA-439), both null on a
+    Telegram session that carries no pair at all and on a session of another source. The fields
+    already there keep their names and shapes."""
     linked = session_db.create_session(
         "topic-linked", "telegram", chat_id="67890", thread_id="topic-42")
     unlinked = session_db.create_session("topic-lobby", "telegram")
@@ -1411,6 +1413,18 @@ async def test_list_sessions_carries_telegram_topic_fields(adapter, session_db):
     session_db.bind_telegram_topic(
         chat_id="67890", thread_id="topic-42", user_id="12345",
         session_key="tg:67890:topic-42", session_id=linked,
+    )
+    # INFRA-439: a group-topic session carries its own chat_id/thread_id on the row and has no
+    # telegram_dm_topic_bindings entry (that table is only written for DM topics). The listing
+    # must return the row's own pair, and a binding must still win over the row's own pair.
+    group = session_db.create_session(
+        "topic-group", "telegram", chat_id="-1004396709845", thread_id="11104")
+    dm_lane = session_db.create_session(
+        "topic-dm-stale-own", "telegram", chat_id="11111", thread_id="stale-thread")
+    session_db.enable_telegram_topic_mode(chat_id="22222", user_id="12345")
+    session_db.bind_telegram_topic(
+        chat_id="22222", thread_id="binding-thread", user_id="12345",
+        session_key="tg:22222:binding-thread", session_id=dm_lane,
     )
 
     app = _create_session_app(adapter)
@@ -1424,6 +1438,9 @@ async def test_list_sessions_carries_telegram_topic_fields(adapter, session_db):
         other_rows = {row["id"]: row for row in (await other_resp.json())["data"]}
 
     assert (rows[linked]["chat_id"], rows[linked]["thread_id"]) == ("67890", "topic-42")
+    # INFRA-439: no binding → the row's own pair; binding present → the binding still wins.
+    assert (rows[group]["chat_id"], rows[group]["thread_id"]) == ("-1004396709845", "11104")
+    assert (rows[dm_lane]["chat_id"], rows[dm_lane]["thread_id"]) == ("22222", "binding-thread")
     assert rows[unlinked]["chat_id"] is None and rows[unlinked]["thread_id"] is None
     assert other_rows[other]["chat_id"] is None and other_rows[other]["thread_id"] is None
     # Additive: the pre-existing keys of a listing row are untouched.

@@ -3046,18 +3046,25 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         )
         return payload
 
-    def _session_rows_with_topic(self, db: Any, sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Listing rows plus the Telegram topic each one is bound to: ``chat_id`` and ``thread_id``,
-        both None when the row has no topic or is not a Telegram session. Additive: the fields of
-        ``_session_response`` are unchanged. Reads the binding through ``db``'s reverse lookup, so it
-        runs off-loop (the caller wraps it in ``asyncio.to_thread``)."""
+    def _session_rows_with_topic(self, db: Any, sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Listing rows plus the Telegram topic each one serves: ``chat_id`` and ``thread_id``, both
+        None when the row has no topic or is not a Telegram session. The DM-topic binding wins when
+        one exists; without one the row's own ``chat_id``/``thread_id`` (group topics, INFRA-439)
+        are used. Additive: the fields of ``_session_response`` are unchanged. Reads the binding
+        through ``db``'s reverse lookup, so it runs off-loop (the caller wraps it in
+        ``asyncio.to_thread``)."""
         rows = []
         for session in sessions:
             row = self._session_response(session)
             binding = (db.get_telegram_topic_binding_by_session(session_id=session["id"])
                        if session.get("source") == "telegram" else None)
-            row["chat_id"] = binding["chat_id"] if binding else None
-            row["thread_id"] = binding["thread_id"] if binding else None
+            # INFRA-439: group topics never get a telegram_dm_topic_bindings row (that table is
+            # DM-only); the truth lives on the session row itself (session_recovery keeps chat_id
+            # and thread_id there). The binding still wins when one exists — DM lanes unchanged.
+            chat = (binding or {}).get("chat_id") or session.get("chat_id")
+            thread = (binding or {}).get("thread_id") or session.get("thread_id")
+            row["chat_id"] = str(chat) if chat not in (None, "") else None
+            row["thread_id"] = str(thread) if thread not in (None, "") else None
             rows.append(row)
         return rows
 
