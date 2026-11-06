@@ -254,4 +254,10 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     "HASS_TOKEN", "EMAIL_PASSWORD", "HERMES_DASHBOARD_SESSION_TOKEN",
     # Remote-compute / infrastructure secrets
     "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "DAYTONA_API_KEY",
+    # Alarma plugin HMAC (DGX-1471, barrier of DGX-698): the signing key the `alarma`
+    # plugin injects into the gateway env to sign /api/alarma* calls to the dashboard.
+    # No spawned child consumes it; a terminal `python` reading os.environ must not
+    # see it. The plugin signs in-process, so stripping children never breaks it.
+    "ALARMA_HMAC_SECRET",
 })
+_ALWAYS_STRIP_FOLDED: frozenset[str] = frozenset(k.upper() for k in _ALWAYS_STRIP_KEYS)
