@@ -54,8 +54,10 @@ jobs:
     # takes minutes and not seconds when the cache misses. `nix flake check`
     # builds 21 checks, and --max-jobs defaults to the core count. It uses the
     # wider runner with no more configuration.
-    # 2026-10-05 devops · fuera de pool: no hay runners de 32/96 núcleos en el clúster; revisar tras dimensionar arc-k8s (INFRA-549, INFRA-548)
-    runs-on: ubuntu-latest-32-core
+    # 2026-11-06 it · temporal: el runner de arc-k8s va topado a 2 núcleos (infra/arc.yaml) y este
+    # job va dimensionado por encima; repo público ⇒ ubuntu-latest no consume franquicia.
+    # Vuelve a arc-k8s cuando el pool dé runners de más de 2 núcleos (INFRA-548, INFRA-549).
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Checkout code

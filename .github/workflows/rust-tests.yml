@@ -30,8 +30,10 @@ jobs:
     # cargo builds codegen units and test binaries in parallel across the
     # cores. This lane also builds the crate from the start when Cargo.toml
     # changes.
-    # 2026-10-05 devops · fuera de pool: no hay runners de 32/96 núcleos en el clúster; revisar tras dimensionar arc-k8s (INFRA-549, INFRA-548)
-    runs-on: ubuntu-latest-32-core
+    # 2026-11-06 it · temporal: el runner de arc-k8s va topado a 2 núcleos (infra/arc.yaml) y este
+    # job va dimensionado por encima; repo público ⇒ ubuntu-latest no consume franquicia.
+    # Vuelve a arc-k8s cuando el pool dé runners de más de 2 núcleos (INFRA-548, INFRA-549).
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
       run:
