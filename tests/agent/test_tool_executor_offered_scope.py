@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import tools.browser_use_cli  # noqa: F401 — registers browser_exec in the registry
+import tools.browser_use_cli  # registers browser_exec in the registry (side-effect import; the bare noqa text broke ruff parsing — RUF100)
 from run_agent import AIAgent
 from tools.code_execution_tool import SANDBOX_ALLOWED_TOOLS, _sandbox_tools_for
 from tools.registry import registry
