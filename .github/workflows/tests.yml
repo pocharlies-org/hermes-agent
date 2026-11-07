@@ -25,7 +25,11 @@ jobs:
     # suite va dimensionada por encima; repo público ⇒ ubuntu-latest no consume franquicia.
     # Vuelve a arc-k8s cuando el pool dé runners de más de 2 núcleos (INFRA-548, INFRA-549).
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 2026-11-07 it · 30 -> 60: en ubuntu-latest (4 núcleos) la suite no cabe en 30 min
+    # (run 42267213355: cancelada por timeout a los 30,7). Es la misma suite que pedía
+    # 96 núcleos; con menos núcleos paga más reloj. Si aun así se pasa de 60, el arreglo
+    # real es partir la suite (deuda de dimensionado, no de este label).
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
