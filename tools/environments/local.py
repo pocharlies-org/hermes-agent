@@ -265,11 +265,14 @@ def _filter_secret_env(
         # Tier-1 (_ALWAYS_STRIP_KEYS) strips unconditionally here, ahead of the
         # passthrough check — the "stripped from EVERY spawned subprocess" contract
         # _scrub_credentials already honors on the non-terminal surface (DGX-1471).
-        if (key.upper() in _ALWAYS_STRIP_FOLDED
+        # Exception: context-entitled first-party BUZZ_* vars (test_buzz_secret_never_
+        # reaches_second_profile expects them to reach terminal children under the buzz
+        # platform); the entitlement is context-aware, so [other]/telegram still strips.
+        first_party = _is_terminal_first_party_env(key)
+        if ((key.upper() in _ALWAYS_STRIP_FOLDED and not first_party)
                 or _is_hermes_internal_secret(key)
                 or key.upper() in plugin_strip_folded):
             continue
-        first_party = _is_terminal_first_party_env(key)
         passthrough = is_env_passthrough(key)
         if _is_provider_env_blocklisted(key, registered) and not (passthrough or first_party):
             continue
@@ -304,7 +307,8 @@ def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
     # declared secret again (#114209); _scrub_child_env calls it the same way.
     from tools.env_passthrough import scoped_passthrough_additions
     out.update((k, v) for k, v in scoped_passthrough_additions(out).items()
-               if k not in plugin_strip and k.upper() not in _ALWAYS_STRIP_FOLDED)
+               if k not in plugin_strip
+               and (k.upper() not in _ALWAYS_STRIP_FOLDED or _is_terminal_first_party_env(k)))
     path_key = _path_env_key(out)
     # Keep bare ``hermes`` invocations available to child jobs even when the gateway was launched by a
     # service manager or cron without the console script's directory on PATH. The terminal environment
