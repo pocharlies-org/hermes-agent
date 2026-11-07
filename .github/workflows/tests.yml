@@ -21,9 +21,15 @@ jobs:
     # 96 cores clear the floor that the slowest single test file sets (about
     # 82s). A second slice divides work that is already at that floor, and
     # adds a second setup.
-    # 2026-10-05 devops · fuera de pool: no hay runners de 32/96 núcleos en el clúster; revisar tras dimensionar arc-k8s (INFRA-549, INFRA-548)
-    runs-on: ubuntu-latest-96-core
-    timeout-minutes: 30
+    # 2026-11-06 it · temporal: el runner de arc-k8s va topado a 2 núcleos (infra/arc.yaml) y esta
+    # suite va dimensionada por encima; repo público ⇒ ubuntu-latest no consume franquicia.
+    # Vuelve a arc-k8s cuando el pool dé runners de más de 2 núcleos (INFRA-548, INFRA-549).
+    runs-on: ubuntu-latest
+    # 2026-11-07 it · 30 -> 60: en ubuntu-latest (4 núcleos) la suite no cabe en 30 min
+    # (run 42267213355: cancelada por timeout a los 30,7). Es la misma suite que pedía
+    # 96 núcleos; con menos núcleos paga más reloj. Si aun así se pasa de 60, el arreglo
+    # real es partir la suite (deuda de dimensionado, no de este label).
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -62,8 +62,10 @@ jobs:
             runner: macos-latest
             marker: macos_only
           - name: Windows-only tests
-            # 2026-10-05 devops · fuera de pool: no existe hardware de esa plataforma en el clúster (skill ci-runners-arc, INFRA-548)
-            runner: windows-latest-32-core
+            # 2026-11-06 it · no existe hardware Windows en el clúster (skill ci-runners-arc); la
+            # variante 32-core no tiene ningún listener (cola eterna). Repo público ⇒ minutos
+            # gratuitos.
+            runner: windows-latest
             marker: windows_only
     steps:
       - name: Checkout code
