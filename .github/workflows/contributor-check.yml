@@ -29,9 +29,18 @@ jobs:
 
       - name: Check for unmapped contributor emails
         id: check-emails
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          # Get the merge base between this PR and main
-          MERGE_BASE=$(git merge-base origin/main HEAD)
+          # Get the merge base between this PR and its BASE branch. Anchoring on main
+          # is wrong for PRs to overlay/** and deploy/**: those lineages diverged from
+          # main, and merge-base(main, HEAD) predates the fork point — the whole upstream
+          # history between both points gets flagged as "new contributors" and the check
+          # can never pass (measured on DGX-1471: 40+ upstream emails flagged on a
+          # 3-commit PR to overlay/dgx-1062-v0222). Push events keep main.
+          BASE="${BASE_REF:-main}"
+          git fetch -q origin "$BASE" 2>/dev/null || true
+          MERGE_BASE=$(git merge-base "origin/$BASE" HEAD)
 
           # Find any new author emails in this PR's commits
           NEW_EMAILS=$(git log ${MERGE_BASE}..HEAD --format='%ae' --no-merges | sort -u)
