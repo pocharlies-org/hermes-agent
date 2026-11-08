@@ -7,6 +7,8 @@ on:
 jobs:
   check:
     name: JS & TS checks
+    # fork pocharlies-org: job del proyecto upstream, aquí no corre (SC-4790)
+    if: github.repository == 'NousResearch/hermes-agent'
     # One 32-core job replaces a 14-leg matrix. The matrix spread about 612s
     # of check payload over 4-core runners. It paid about 371s of repeated
     # setup to do it: 14 checkouts, 14 node installs, 14 node_modules
@@ -14,7 +16,6 @@ jobs:
     #
     # One larger runner installs one time. vitest, tsc and eslint each size
     # their own worker pool from the core count.
-    # 2026-10-05 devops · fuera de pool: no hay runners de 32/96 núcleos en el clúster; revisar tras dimensionar arc-k8s (INFRA-549, INFRA-548)
     runs-on: ubuntu-latest-32-core
     timeout-minutes: 30
     steps:
