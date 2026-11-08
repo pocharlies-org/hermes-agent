@@ -21,7 +21,7 @@ from tools.environments.base import BaseEnvironment
 from tools.environments.base_output import _pipe_stdin
 from hermes_cli._subprocess_compat import windows_hide_flags
 from tools.environments.local_env_policy import (  # noqa: F401 — _HERMES_PROVIDER_ENV_BLOCKLIST stays importable from here
-    _ALWAYS_STRIP_KEYS, _HERMES_PROVIDER_ENV_BLOCKLIST, _HERMES_PROVIDER_ENV_FORCE_PREFIX,
+    _ALWAYS_STRIP_FOLDED, _ALWAYS_STRIP_KEYS, _HERMES_PROVIDER_ENV_BLOCKLIST, _HERMES_PROVIDER_ENV_FORCE_PREFIX,
     _is_hermes_internal_secret, _is_provider_env_blocklisted, _is_terminal_first_party_env,
     _matches_terminal_first_party_prefix, _plugin_terminal_env_strip_keys, strip_profile_gate_env)
 from tools.environments.local_gitbash_probe import (
@@ -258,12 +258,21 @@ def _filter_secret_env(
             if not unwrap_force:
                 continue
             key = key[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            if not _is_hermes_internal_secret(key):
+            if (not _is_hermes_internal_secret(key)
+                    and key.upper() not in _ALWAYS_STRIP_FOLDED):
                 out[key] = value
             continue
-        if _is_hermes_internal_secret(key) or key.upper() in plugin_strip_folded:
-            continue
+        # Tier-1 (_ALWAYS_STRIP_KEYS) strips unconditionally here, ahead of the
+        # passthrough check — the "stripped from EVERY spawned subprocess" contract
+        # _scrub_credentials already honors on the non-terminal surface (DGX-1471).
+        # Exception: context-entitled first-party BUZZ_* vars (test_buzz_secret_never_
+        # reaches_second_profile expects them to reach terminal children under the buzz
+        # platform); the entitlement is context-aware, so [other]/telegram still strips.
         first_party = _is_terminal_first_party_env(key)
+        if ((key.upper() in _ALWAYS_STRIP_FOLDED and not first_party)
+                or _is_hermes_internal_secret(key)
+                or key.upper() in plugin_strip_folded):
+            continue
         passthrough = is_env_passthrough(key)
         if _is_provider_env_blocklisted(key) and not (passthrough or first_party):
             continue
@@ -297,7 +306,9 @@ def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
     # Unguarded on purpose: a scope/config failure here must be loud, not silently drop the
     # declared secret again (#114209); _scrub_child_env calls it the same way.
     from tools.env_passthrough import scoped_passthrough_additions
-    out.update((k, v) for k, v in scoped_passthrough_additions(out).items() if k not in plugin_strip)
+    out.update((k, v) for k, v in scoped_passthrough_additions(out).items()
+               if k not in plugin_strip
+               and (k.upper() not in _ALWAYS_STRIP_FOLDED or _is_terminal_first_party_env(k)))
     path_key = _path_env_key(out)
     # Keep bare ``hermes`` invocations available to child jobs even when the gateway was launched by a
     # service manager or cron without the console script's directory on PATH. The terminal environment
@@ -681,7 +692,11 @@ def _make_run_env(env: dict) -> dict:
     the LAUNCH profile's; under a routed home override its ``.env`` residue is dropped first
     (``strip_launch_profile_env``, a no-op for the launch profile) so the backend's own ``env``
     and the served profile's declared passthrough names are what the child sees."""
-    return _scrubbed_env([(dict(strip_launch_profile_env(os.environ.copy()) | env), True)], frozenset(),
+    # Plugin-registered terminal-backend strip keys apply here too, as in
+    # _sanitize_subprocess_env — the bare frozenset() was a hole that let plugin
+    # credentials reach terminal children (DGX-1471).
+    return _scrubbed_env([(dict(strip_launch_profile_env(os.environ.copy()) | env), True)],
+                         _plugin_terminal_env_strip_keys(),
                          lambda p: _prepend_git_bash_dirs(_append_missing_sane_path_entries(p)))
 
 
