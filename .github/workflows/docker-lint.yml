@@ -44,12 +44,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      # 2026-11-09 it · shellcheck por apt en vez de ludeeus/action-shellcheck: la acción se
+      # baja un tarball que en el pool arc-k8s llega truncado ("tar: Error is not recoverable",
+      # rojo en main desde el run 1 de CI). apt trae shellcheck y el job deja de depender del CDN.
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      # Severity = error: SC1091 (can't follow sourced script) is info-level and would
+      # otherwise fail when the venv activate script doesn't exist at lint time.
       - name: shellcheck
-        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # v2.0.0
-        env:
-          # Severity = error: SC1091 (can't follow sourced script) is info-
-          # level and would otherwise fail when the venv activate script
-          # doesn't exist at lint time.
-          SHELLCHECK_OPTS: --severity=error
-        with:
-          scandir: ./docker
+        run: find docker -name '*.sh' -print0 | xargs -0 -r shellcheck --severity=error

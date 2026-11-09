@@ -35,7 +35,9 @@ jobs:
   diff:
     name: package-lock.json semantic diff
     runs-on: arc-k8s
-    timeout-minutes: 5
+    # 2026-11-09 it · 5 -> 15: medido, el job agota los 5 min en el runner arc-k8s (2 núcleos,
+    # "exceeded the maximum execution time of 5m0s", rojo en main desde el run 1).
+    timeout-minutes: 15
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
       review_status: ${{ steps.emit-status.outputs.review_status }}
