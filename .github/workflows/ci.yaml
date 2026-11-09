@@ -205,7 +205,8 @@ jobs:
   review-labels:
     name: Review label gate
     needs: [detect, supply-chain]
-    if: always() && needs.detect.outputs.event_name == 'pull_request' && (needs.detect.outputs.ci_review == 'true' || needs.detect.outputs.mcp_catalog == 'true' || needs.supply-chain.outputs.critical_findings == 'true')
+    # fork pocharlies-org: la puerta de etiquetas es del proceso upstream, aquí no corre (SC-4790)
+    if: always() && github.repository == 'NousResearch/hermes-agent' && needs.detect.outputs.event_name == 'pull_request' && (needs.detect.outputs.ci_review == 'true' || needs.detect.outputs.mcp_catalog == 'true' || needs.supply-chain.outputs.critical_findings == 'true')
     uses: ./.github/workflows/review-labels.yml
     with:
       ci_review: ${{ needs.detect.outputs.ci_review == 'true' }}

@@ -8,6 +8,8 @@ permissions:
 
 jobs:
   docs-site-checks:
+    # fork pocharlies-org: job del proyecto upstream, aquí no corre (SC-4790)
+    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: arc-k8s
     timeout-minutes: 20
     steps:
