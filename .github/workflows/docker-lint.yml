@@ -38,6 +38,8 @@ jobs:
 
   shellcheck:
     name: Lint docker/ shell scripts (shellcheck)
+    # fork pocharlies-org: job del proyecto upstream, aquí no corre (SC-4790)
+    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: arc-k8s
     timeout-minutes: 5
     steps:
