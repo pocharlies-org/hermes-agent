@@ -8,7 +8,9 @@ Failures always fail the gate. A skipped or missing update/E2E consumer also
 fails whenever ``detect.outputs`` selects its lane. Other skips additionally
 fail in release mode unless the job is in :data:`EXCLUDED_JOBS` (PR-only jobs
 that cannot run on a tag event, plus the deferred Desktop E2E). The OSV scan
-is advisory in its findings only — its execution is required.
+is advisory in its findings only — its execution is required. In a fork
+(``GITHUB_REPOSITORY`` other than upstream) the lanes SC-4790 switched off are
+not required: they can never run there.
 
     echo "$NEEDS" | python3 scripts/ci/required_results.py [--release]
 """
@@ -27,6 +29,12 @@ PR_ONLY_JOBS = ("history-check", "lockfile-diff", "prompt-surface-diff", "supply
 DEFERRED_JOBS = ("e2e-desktop",)
 EXCLUDED_JOBS = frozenset((*PR_ONLY_JOBS, *DEFERRED_JOBS))
 
+# fork pocharlies-org (SC-4790): estos dos jobs llevan `if: github.repository ==
+# UPSTREAM_REPO` en tests.yml y tests-os.yml porque sus labels no tienen listener aquí.
+# Un lane que nunca corre no puede ser requerido; el resto de la exigencia queda igual.
+UPSTREAM_REPO = "NousResearch/hermes-agent"
+FORK_DISABLED_JOBS = frozenset(("tests", "tests-os"))
+
 NEEDS_JSON_OUTPUT = "needs-json"
 
 # Reusable-workflow parents of the update/E2E consumers, and of the real
@@ -44,11 +52,12 @@ _UPDATE_CONSUMER_LANES = {
 def evaluate_gate(
     needs: dict[str, dict[str, Any]] | None,
     release: bool = False,
+    fork: bool = False,
 ) -> dict[str, Any]:
     """Verdict for a ``needs`` context; see the module docstring.
 
     Returns ``ok``, plus sorted ``failed`` (every non-success, non-allowed
-    entry) and ``allowed_skips``.
+    entry) and ``allowed_skips``. ``fork`` drops the lanes SC-4790 switched off.
     """
     failed: list[str] = []
     allowed_skips: list[str] = []
@@ -56,6 +65,8 @@ def evaluate_gate(
     lanes = (entries.get("detect") or {}).get("outputs") or {}
     required = {job for job, keys in _UPDATE_CONSUMER_LANES.items()
                 if any(lanes.get(key) in ("true", True) for key in keys)}
+    if fork:
+        required -= FORK_DISABLED_JOBS
     if not entries:
         failed.append("<no-needs>")
     failed.extend(required - entries.keys())
@@ -102,7 +113,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     needs = json.load(sys.stdin)
-    verdict = evaluate_gate(needs, release=args.release)
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    verdict = evaluate_gate(needs, release=args.release,
+                            fork=repo is not None and repo != UPSTREAM_REPO)
     compact = compact_results(needs)
 
     output_file = os.environ.get("GITHUB_OUTPUT")

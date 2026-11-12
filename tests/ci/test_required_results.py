@@ -72,6 +72,26 @@ def test_empty_needs_fails_closed(needs, release):
     assert required_results.compact_results(needs) == {}
 
 
+@pytest.mark.parametrize("repo,lint,code", [
+    ("pocharlies-org/hermes-agent", "success", 0),
+    ("pocharlies-org/hermes-agent", "failure", 1),
+    (required_results.UPSTREAM_REPO, "success", 1),
+    (None, "success", 1),
+])
+def test_fork_disabled_lanes_are_not_required(tmp_path, repo, lint, code):
+    """SC-4790: tests/tests-os never run in the fork, so they cannot be required there."""
+    needs = {"detect": {"result": "success", "outputs": {"python": "true"}},
+             "tests": {"result": "skipped"}, "tests-os": {"result": "skipped"},
+             "lint": {"result": lint}}
+    env = {**os.environ, "GITHUB_OUTPUT": str(tmp_path / "out.txt")}
+    env.pop("GITHUB_REPOSITORY", None)
+    if repo is not None:
+        env["GITHUB_REPOSITORY"] = repo
+    child = subprocess.run([sys.executable, str(SCRIPT)], input=json.dumps(needs),
+                           capture_output=True, text=True, timeout=30, env=env, check=False)
+    assert child.returncode == code, child.stdout
+
+
 @pytest.mark.parametrize("release,results,code,report", [
     (True, {"detect": "success", "e2e-desktop": "skipped"}, 0, "All checks passed"),
     (True, {"tests": "skipped", "history-check": "skipped", "lint": "failure"},
