@@ -1,13 +1,18 @@
 # Overlay image: the files this branch changes, on top of the live image.
-# Stacked overlay DGX-1471: base = fork-d923a5e-p3a0d745 (the live tag of the chart, itself
-# upstream v0.22.2 + the 12-file overlay of this branch: reasoning picker PR #119110, DGX-578,
-# INFRA-776, INFRA-697, DGX-791, INFRA-439). Only the files DGX-1471 changes are COPYed here:
-# - DGX-1471 (barrera DGX-698): tools/environments/local.py y local_env_policy.py —
-#   ALARMA_HMAC_SECRET es Tier-1 y _filter_secret_env la aplica ahora en AMBOS caminos
-#   (_make_run_env del terminal en primer plano y _sanitize_subprocess_env).
-# Before building a new stack, verify these two files in the BASE answer to the shas of this
-# branch at the fork point (the COPY overwrites without looking).
-ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p3a0d745
+# Stacked overlay SC-5381: base = fork-d923a5e-p131ee81 (the live tag of the chart, itself
+# upstream v0.22.2 + the 12-file overlay of this branch + the two DGX-1471 files). Only the
+# files SC-5381 changes are COPYed here:
+# - SC-5381 (pieza 4 del backbone de eventos): gateway/webhook_inbox.py (nuevo),
+#   gateway/platforms/webhook.py y gateway/run_startup.py — el turno de webhook aceptado con
+#   202 queda escrito en el state.db antes de responder, y el siguiente arranque replaya lo
+#   que un proceso muerto dejó a medias (antes se perdía: el id vivía solo en memoria).
+# Before building a new stack, verify these files in the BASE answer to the shas of this
+# branch at the fork point (the COPY overwrites without looking). Verificado el 12-11-2026
+# contra el pod vivo hermes-gateway-74df485648-zcb4d: webhook.py 6169d0d7fb2f49bb y
+# run_startup.py 913fb4fd24033e67, idénticos al fork point ae07991ef7; webhook_inbox.py no
+# existe en la base (es nuevo).
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p131ee81
 FROM ${BASE}
-COPY --chmod=644 tools/environments/local.py /opt/hermes/tools/environments/local.py
-COPY --chmod=644 tools/environments/local_env_policy.py /opt/hermes/tools/environments/local_env_policy.py
+COPY --chmod=644 gateway/webhook_inbox.py /opt/hermes/gateway/webhook_inbox.py
+COPY --chmod=644 gateway/platforms/webhook.py /opt/hermes/gateway/platforms/webhook.py
+COPY --chmod=644 gateway/run_startup.py /opt/hermes/gateway/run_startup.py
