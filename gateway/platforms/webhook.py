@@ -97,7 +97,7 @@ class _WebhookDeliveryIdentity:
     @classmethod
     def from_session_chat_id(cls, chat_id: str) -> Optional["_WebhookDeliveryIdentity"]:
         """Inverse of ``session_chat_id``; None for anything that is not a v2 webhook chat id. SC-5381:
-        the durable inbox and the reply leg both need the parts back, and guessing them from the
+        the durable inbox (``on_processing_complete``) needs the parts back, and guessing them from the
         ``webhook/<route>`` display name breaks on routes or profiles that contain a slash."""
         if not isinstance(chat_id, str) or not chat_id.startswith("webhook:v2:"):
             return None
