@@ -94,6 +94,22 @@ class _WebhookDeliveryIdentity:
         token = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
         return f"webhook:v2:{token}"
 
+    @classmethod
+    def from_session_chat_id(cls, chat_id: str) -> Optional["_WebhookDeliveryIdentity"]:
+        """Inverse of ``session_chat_id``; None for anything that is not a v2 webhook chat id. SC-5381:
+        the durable inbox and the reply leg both need the parts back, and guessing them from the
+        ``webhook/<route>`` display name breaks on routes or profiles that contain a slash."""
+        if not isinstance(chat_id, str) or not chat_id.startswith("webhook:v2:"):
+            return None
+        try:
+            token = chat_id[len("webhook:v2:"):]
+            parts = json.loads(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)))
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(parts, list) or len(parts) != 3 or not all(isinstance(p, str) for p in parts):
+            return None
+        return cls(profile=parts[0], route=parts[1], delivery_id=parts[2])
+
 
 def _is_loopback_host(host: Optional[str]) -> bool:
     """True when `host` binds only to the local machine (falsy → non-loopback: usually a public default bind)."""
@@ -370,6 +386,16 @@ class WebhookAdapter(BasePlatformAdapter):
         """Return True when this route/profile-qualified delivery should be processed."""
         if (seen_at := self._seen_deliveries.get(identity)) is not None and now - seen_at < self._idempotency_ttl:
             return False
+        # SC-5381: the dict above dies with the process, so a provider retry after a restart used to
+        # open a second turn for the same delivery. The inbox answers across boots (agent turns only).
+        try:
+            from gateway import webhook_inbox
+            if webhook_inbox.inbox_enabled() and webhook_inbox.seen(
+                    webhook_inbox.compute_inbox_id(identity.profile, identity.route, identity.delivery_id),
+                    self._idempotency_ttl, now):
+                return False
+        except Exception:
+            logger.debug("[webhook] inbox dedup failed for %s", identity.delivery_id, exc_info=True)
         if seen_at is not None:
             self._seen_deliveries.pop(identity, None)
         self._seen_deliveries[identity] = now
@@ -748,18 +774,84 @@ class WebhookAdapter(BasePlatformAdapter):
             source.profile = profile
         event = MessageEvent(text=prompt, message_type=MessageType.TEXT, source=source, raw_message=payload,
                              message_id=delivery_id)
+        # SC-5381: the turn is durable BEFORE the 202 goes out, so a restart in between no longer loses
+        # it. Best-effort: an inbox failure must not stop the webhook (same contract as the reply ledger).
+        inbox_id = None
+        try:
+            from gateway import webhook_inbox
+            if webhook_inbox.inbox_enabled():
+                inbox_id = webhook_inbox.compute_inbox_id(identity.profile, identity.route, delivery_id)
+                key_fn = getattr(self.gateway_runner, "_session_key_for_source", None)
+                webhook_inbox.record(inbox_id=inbox_id, profile=identity.profile, route=route_name,
+                                     delivery_id=delivery_id, prompt=prompt, event_type=event_type,
+                                     payload=json.dumps(payload, ensure_ascii=False, default=str),
+                                     session_key=key_fn(source) if key_fn else None)
+        except Exception:
+            inbox_id = None
+            logger.debug("[webhook] inbox record failed for %s", delivery_id, exc_info=True)
         # The per-delivery session is closed by ``on_processing_complete`` once the run finishes
         # (``handle_message`` is fire-and-forget, so nothing can be closed here).
         task = asyncio.create_task(self.handle_message(event))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+        if inbox_id:
+            task.add_done_callback(lambda t: self._inbox_mark_failed(inbox_id, t))
         return task
+
+    @staticmethod
+    def _inbox_mark_failed(inbox_id: str, task: asyncio.Task) -> None:
+        """A run task that raised never reached ``on_processing_complete``: leave the row 'failed' (a
+        retry boundary the next boot sweeps) instead of 'running' under a live owner, which no sweep
+        would ever claim."""
+        if task.cancelled() or task.exception() is None:
+            return
+        try:
+            from gateway import webhook_inbox
+            webhook_inbox.mark_failed(inbox_id, repr(task.exception()))
+        except Exception:
+            logger.debug("[webhook] inbox mark_failed failed for %s", inbox_id, exc_info=True)
+
+    def resume_inbox(self, rows: list[dict]) -> int:
+        """Replay the turns a previous process left unfinished (SC-5381). Called once at boot by
+        ``run_startup`` with the rows already claimed for this profile. A route that no longer exists
+        cannot be replayed: the row is failed, not silently dropped."""
+        from gateway import webhook_inbox
+        replayed = 0
+        for row in rows:
+            route_config = self._routes.get(row["route"])
+            if route_config is None:
+                webhook_inbox.mark_failed(row["inbox_id"], "route no longer configured")
+                logger.warning("[webhook] inbox delivery %s: route %s is gone", row["delivery_id"], row["route"])
+                continue
+            try:
+                payload = json.loads(row["payload"]) if row["payload"] else None
+            except ValueError:
+                payload = None
+            logger.info("[webhook] inbox replaying delivery %s on route %s (attempt %d)",
+                        row["delivery_id"], row["route"], row["attempts"])
+            self._spawn_agent_run(payload, webhook_inbox.RECOVERED_MARKER + row["prompt"], row["delivery_id"],
+                                  time.time(), route_config=route_config, route_name=row["route"],
+                                  profile=row["profile"] if row["profile"] != "default" else None,
+                                  event_type=row["event_type"] or "unknown")
+            replayed += 1
+        return replayed
 
     async def on_processing_complete(self, event: MessageEvent, outcome: Any) -> None:
         """Close the one-shot per-delivery session: ``prune_sessions`` only reaps rows with ``ended_at`` set, so
         unclosed webhook sessions leak unbounded. Fires at the true end of the run; ``end_session()`` is
         first-reason-wins."""
         await self._end_webhook_session(event, event.source.chat_id)
+        # SC-5381: the turn really ended here (not when the task returned), so this is the only place
+        # the inbox row may become terminal.
+        identity = _WebhookDeliveryIdentity.from_session_chat_id(event.source.chat_id)
+        if identity is not None:
+            try:
+                from gateway import webhook_inbox
+                if webhook_inbox.inbox_enabled():
+                    webhook_inbox.mark_done(webhook_inbox.compute_inbox_id(
+                        identity.profile, identity.route, identity.delivery_id))
+            except Exception:
+                logger.debug("[webhook] inbox mark_done failed for %s", identity.delivery_id, exc_info=True)
 
     async def _end_webhook_session(self, event: MessageEvent, session_chat_id: str) -> None:
         """Mark the per-delivery session ended via ``SessionDB.end_session`` (never a hand-written UPDATE),

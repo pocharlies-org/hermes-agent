@@ -363,6 +363,35 @@ class GatewayStartupMixin:
         await self._clear_resume_pending_for_claimed_obligations(claimed)
         return claimed
 
+    async def _resume_webhook_inbox(self) -> int:
+        """Replay the webhook turns a previous process left unfinished (SC-5381,
+        ``gateway/webhook_inbox.py``): the POST was accepted with a 202 and the pod died before the run
+        ended. Runs BEFORE ``_schedule_resume_pending_sessions`` on purpose — a gracefully drained turn
+        also carries ``resume_pending``, and resuming it on top of the replay would run it twice. Only
+        profiles this boot actually serves are claimed; the rest stay recoverable for a boot that does."""
+        from gateway import webhook_inbox
+        from gateway.config import Platform
+        if not await asyncio.to_thread(webhook_inbox.inbox_enabled):
+            return 0
+        adapters: dict[str, Any] = {}
+        if (default := self.adapters.get(Platform.WEBHOOK)) is not None:
+            adapters["default"] = default
+        for profile, by_platform in (getattr(self, "_profile_adapters", None) or {}).items():
+            if (adapter := by_platform.get(Platform.WEBHOOK)) is not None:
+                adapters.setdefault(profile, adapter)
+        if not adapters:
+            return 0
+        rows = await asyncio.to_thread(webhook_inbox.sweep_recoverable, None, profiles=set(adapters))
+        if not rows:
+            return 0
+        await self._clear_resume_pending_for_claimed_obligations(rows)
+        replayed = 0
+        for profile, adapter in adapters.items():
+            if mine := [row for row in rows if row["profile"] == profile]:
+                replayed += adapter.resume_inbox(mine)
+        logger.info("[webhook-inbox] replayed %d unfinished webhook turn(s)", replayed)
+        return replayed
+
     @staticmethod
     async def _release_runtime_claim_quiet(obligation_id, log_fmt: str, error: str = "send_path_degraded") -> None:
         """Release an unsent runtime delivery-ledger claim; log-only on failure. ``error`` is what the row
@@ -1518,6 +1547,10 @@ class GatewayStartupMixin:
         # written first would get a lower row id than them for good.
         with _log_suppressed(logging.WARNING, "Pending-message recovery failed: %s"):
             recover_gateway_pending(self)
+        # SC-5381: the webhook turns the previous process accepted but never finished, replayed from
+        # their durable inbox before the resume sweep below can run them a second time.
+        with _log_suppressed(logging.WARNING, "Webhook inbox recovery failed: %s"):
+            await self._resume_webhook_inbox()
         # Auto-resume restart-interrupted sessions (ledger-answered ones were cleared above); a failed
         # auto-resume stays visible on the next user message.
         self._schedule_resume_pending_sessions()
