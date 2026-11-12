@@ -32,6 +32,10 @@ concurrency:
 jobs:
   bootstrap-installer:
     name: cargo test (bootstrap installer)
+    # fork pocharlies-org: job del proyecto upstream, aquí no corre (SC-4790). El label
+    # ubuntu-latest-32-core no tiene listener: en cola hasta la cancelación (0 pasos en la #30).
+    # Misma decisión que fd8847e en main.
+    if: github.repository == 'NousResearch/hermes-agent'
     # cargo builds codegen units and test binaries in parallel across the
     # cores. This lane also builds the crate from the start when Cargo.toml
     # changes.

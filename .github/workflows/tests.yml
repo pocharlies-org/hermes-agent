@@ -43,6 +43,10 @@ jobs:
     # scale linearly. run_tests_parallel.py partitions from the checkout alone, so
     # both slices agree on the split without a planning job.
     name: Run tests (${{ matrix.slice }}/2)
+    # fork pocharlies-org: job del proyecto upstream, aquí no corre (SC-4790). El label
+    # ubuntu-latest-32-core no tiene listener: el job se queda en cola hasta que lo cancelan
+    # (4 h 26 m en la #30, 0 pasos ejecutados). Misma decisión que fd8847e en main.
+    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: ubuntu-latest-32-core
     timeout-minutes: 30
     strategy:
