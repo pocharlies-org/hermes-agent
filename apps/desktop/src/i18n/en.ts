@@ -291,6 +291,7 @@ export const en: Translations = {
     connectedComputer: 'the connected computer',
     destination: 'Import into',
     all: 'All',
+    anyTime: 'Any time',
     search: 'Search loaded sessions',
     scanning: 'Finding conversations',
     scanError: 'Could not find sessions',

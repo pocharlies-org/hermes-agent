@@ -19,13 +19,13 @@ def _display_title(parsed, source):
     return (title or _SOURCE_LABELS[source]).lstrip("# ")[:180]
 
 
-def _candidates(source=None):
+def _candidates(source=None, max_age_seconds=None):
     """``(mtime, handle, source, path, size)`` rows across sources, newest first. The handle is
     the only identifier handed to the client; a request can never name a path."""
     if source is not None and source not in _SOURCES:
         raise ValueError("Unknown session source")
     rows = [(st.st_mtime, hashlib.sha256(f"{name}:{path}".encode()).hexdigest(), name, path, st.st_size)
-            for name in _SOURCES if source in (None, name) for path, st in _walk(name)]
+            for name in _SOURCES if source in (None, name) for path, st in _walk(name, max_age_seconds=max_age_seconds)]
     return sorted(rows, key=lambda row: (row[0], row[1]), reverse=True)
 
 
@@ -48,10 +48,12 @@ def resolve_foreign_session(handle):
     raise ValueError("Session no longer available. Refresh the list and try again")
 
 
-def list_foreign_sessions(source=None, offset=0, limit=25):
+def list_foreign_sessions(source=None, offset=0, limit=25, days=None):
     if not isinstance(offset, int) or offset < 0 or not isinstance(limit, int) or not 1 <= limit <= 50:
         raise ValueError("Invalid session page")
-    candidates = _candidates(source)
+    if days is not None and (not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 365):
+        raise ValueError("Invalid session age filter")
+    candidates = _candidates(source, None if days is None else days * 86400)
     rows, unreadable = [], 0
     # Page candidates before parsing. Empty or oversized logs cannot turn a
     # request for 25 rows into an unbounded transcript scan.

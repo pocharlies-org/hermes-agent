@@ -1496,6 +1496,7 @@ jobs:
       && (needs.validate.outputs.win32-arm64 != 'true' || needs.build-win32-arm64.result == 'success')
       && (inputs.release-phase == '' || inputs.release-phase == 'candidate')
       && (inputs.upload_release == true || inputs.release-phase == 'candidate' || inputs.build_commit != '' || inputs.channel != '')
+      && github.repository == 'NousResearch/hermes-agent'
     runs-on: windows-latest-32-core
     environment: release-signing
     cache-mode: read
@@ -2429,7 +2430,7 @@ jobs:
   stable-publish:
     name: Verify published candidate files
     needs: validate
-    if: inputs.release-phase == 'publish'
+    if: inputs.release-phase == 'publish' && github.repository == 'NousResearch/hermes-agent'
     runs-on: ubuntu-latest-32-core
     environment: release-signing
     timeout-minutes: 90
@@ -2455,7 +2456,7 @@ jobs:
   stable-store:
     name: Submit the verified Store package
     needs: [validate, stable-publish]
-    if: inputs.release-phase == 'publish' && inputs.skip-store != true
+    if: inputs.release-phase == 'publish' && inputs.skip-store != true && github.repository == 'NousResearch/hermes-agent'
     # The Store is not a release gate: a failed submission leaves the release publishable
     # and the summary names the Store package for a manual Partner Center upload.
     continue-on-error: true

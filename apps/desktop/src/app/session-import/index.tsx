@@ -30,6 +30,7 @@ export function SessionImportView({ owner, onClose, onOpenSession }: SessionImpo
   const copy = t.sessionImport
   const queryClient = useQueryClient()
   const [source, setSource] = useState<'all' | 'claude' | 'codex'>('all')
+  const [days, setDays] = useState<'any' | '1' | '2' | '7'>('any')
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
@@ -45,7 +46,7 @@ export function SessionImportView({ owner, onClose, onOpenSession }: SessionImpo
   const scope = [owner.connectionId, owner.profile]
 
   const sessions = useInfiniteQuery({
-    queryKey: ['foreign-sessions', ...scope, source],
+    queryKey: ['foreign-sessions', ...scope, source, days],
     initialPageParam: 0,
     queryFn: ({ pageParam, signal }) =>
       foreignRequest<ForeignPage>(
@@ -53,7 +54,8 @@ export function SessionImportView({ owner, onClose, onOpenSession }: SessionImpo
         'list',
         {
           source: source === 'all' ? null : source,
-          offset: pageParam
+          offset: pageParam,
+          days: days === 'any' ? null : Number(days)
         },
         signal
       ),
@@ -167,6 +169,20 @@ export function SessionImportView({ owner, onClose, onOpenSession }: SessionImpo
                   { id: 'codex', label: 'Codex' }
                 ]}
                 value={source}
+              />
+              <SegmentedControl
+                onChange={value => {
+                  setDays(value)
+                  setSelected(null)
+                  setError('')
+                }}
+                options={[
+                  { id: 'any', label: copy.anyTime },
+                  { id: '1', label: '24h' },
+                  { id: '2', label: '48h' },
+                  { id: '7', label: '7d' }
+                ]}
+                value={days}
               />
               {rows.length > 0 && (
                 <SearchField

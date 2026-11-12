@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   e2e:
+    if: github.repository == 'NousResearch/hermes-agent'
     name: Playwright E2E (Linux)
     # This job builds the renderer and the electron bundle, then drives a real
     # Electron app under xvfb. vite, tsc and the Playwright workers all scale

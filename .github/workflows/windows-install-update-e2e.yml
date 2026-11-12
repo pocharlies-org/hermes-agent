@@ -48,6 +48,7 @@ concurrency:
 
 jobs:
   install-update:
+    if: github.repository == 'NousResearch/hermes-agent'
     name: Windows install.ps1 + hermes update E2E
     runs-on: windows-latest-32-core
     # A typical run is ~17 min; one slow runner took 28 min for the same work (run 36295230146).
