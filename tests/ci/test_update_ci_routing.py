@@ -110,7 +110,10 @@ def _detect_outputs(lanes: dict[str, bool], event_name: str = "workflow_dispatch
     classify = next(s for s in detect["steps"] if s.get("id") == "classify")
     assert classify["uses"] == "./.github/actions/detect-changes"
     steps = {"classify": {"outputs": action_out}}
-    ctx = {"steps": steps, "github": {"event_name": event_name}, "inputs": {}}
+    # El replay modela una run del upstream: los guards de SC-4790 (fork pocharlies-org)
+    # son por repositorio, y sin `repository` en el contexto se evaluarían como falsos.
+    ctx = {"steps": steps, "inputs": {},
+           "github": {"event_name": event_name, "repository": "NousResearch/hermes-agent"}}
     steps["gate-lanes"] = {"outputs": workflow_steps.outputs(gate, ctx)}
     return {k: gha.render(v, ctx) for k, v in detect["outputs"].items()}
 
@@ -149,7 +152,8 @@ def _run_workflow(rel: str, *, inputs: dict[str, Any], detect: dict[str, Any] | 
             all_ran = all(n in ran for n in needs)
             ctx = {
                 "inputs": inputs,
-                "github": {"event_name": "pull_request", "ref_type": "branch"},
+                "github": {"event_name": "pull_request", "ref_type": "branch",
+                           "repository": "NousResearch/hermes-agent"},
                 "needs": {n: {"outputs": (ran.get(n) or {}).get("outputs", {}),
                               "result": "success" if n in ran else "skipped"} for n in needs},
                 "__status__": {"always": True, "success": all_ran, "failure": False, "cancelled": False},
