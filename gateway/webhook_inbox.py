@@ -92,6 +92,9 @@ def inbox_enabled(config: Optional[dict[str, Any]] = None) -> bool:
         value = (config.get("gateway") or {}).get("webhook_inbox", True)
         return value.strip().lower() not in {"false", "0", "no", "off"} if isinstance(value, str) else bool(value)
     except Exception:
+        # Frontera deliberada: la config puede fallar de muchas formas (import, YAML, IO) y ninguna debe
+        # apagar el inbox en silencio; se deja activo y la traza queda visible.
+        logger.debug("[webhook-inbox] config gate unreadable, inbox left on", exc_info=True)
         return True
 
 
