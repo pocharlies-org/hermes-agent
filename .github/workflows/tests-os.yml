@@ -76,6 +76,10 @@ concurrency:
 jobs:
   os-tests:
     name: ${{ matrix.name }}
+    # fork pocharlies-org: job del proyecto upstream, aquí no corre (SC-4790). Los labels
+    # windows-latest-32-core y windows-latest-32-arm-core no tienen listener: en cola hasta la
+    # cancelación (4 h 26 m en la #30, 0 pasos). Misma decisión que fd8847e en main.
+    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout || 30 }}
     strategy:
