@@ -78,7 +78,10 @@ jobs:
     needs: [detect]
     # Release runs force the lane: a stable candidate must build the flake
     # no matter what its diff touches.
-    if: needs.detect.outputs.nix == 'true' || inputs.release == true
+    # fork pocharlies-org: job del proyecto upstream, aquí no corre (SC-4790). El label
+    # ubuntu-latest-32-core no tiene listener: en cola hasta la cancelación (0 pasos en la #30).
+    # Misma decisión que fd8847e en main.
+    if: (needs.detect.outputs.nix == 'true' || inputs.release == true) && github.repository == 'NousResearch/hermes-agent'
     # The build compiles the package and its whole dependency closure, so this
     # takes minutes and not seconds when the cache misses. `nix flake check`
     # builds 21 checks, and --max-jobs defaults to the core count. It uses the
