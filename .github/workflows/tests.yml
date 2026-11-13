@@ -37,6 +37,7 @@ concurrency:
 
 jobs:
   test:
+    if: github.repository == 'NousResearch/hermes-agent'
     # Two 32-core slices instead of one box: on one runner the suite is ~10 min of
     # nearly fully packed work, and a single bigger runner (96-core) scaled ~1.8x for
     # 3x the price because files contend for the shared machine. Separate machines
@@ -141,7 +142,7 @@ jobs:
   e2e:
     # The core suites spawn real serve / gateway / tui_gateway / MCP / SQLite
     # writer processes per test; a 4-vCPU runner serialises them into timeouts.
-    if: inputs.e2e
+    if: inputs.e2e && github.repository == 'NousResearch/hermes-agent'
     runs-on: ubuntu-latest-32-core
     timeout-minutes: 30
     steps:
@@ -275,6 +276,7 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   e2e-upgrade:
+    if: github.repository == 'NousResearch/hermes-agent'
     # tests/e2e/core/upgrade: a real N-1 -> HEAD `hermes update` (clean,
     # autostash, killed mid-pull / mid-deps, offline), fresh-process import and
     # entrypoint smoke, the config round-trip property matrix, and the lane

@@ -11,6 +11,7 @@ on:
 
 jobs:
   check:
+    if: github.repository == 'NousResearch/hermes-agent'
     name: JS & TS checks
     # One 32-core job replaces a 14-leg matrix. The matrix spread about 612s
     # of check payload over 4-core runners. It paid about 371s of repeated

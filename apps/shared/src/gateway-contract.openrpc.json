@@ -31458,6 +31458,20 @@
             ],
             "default": null,
             "title": "Limit"
+          },
+          "days": {
+            "anyOf": [
+              {
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Days"
           }
         },
         "title": "SessionForeignListParams",

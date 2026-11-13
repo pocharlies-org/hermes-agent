@@ -95,3 +95,30 @@ def test_foreign_pages_confine_handles_and_failed_import_rolls_back(tmp_path, mo
         assert db.session_count() == 0
     finally:
         db.close()
+
+
+def test_foreign_days_filter_bounds_the_page_and_rejects_bad_values(tmp_path, monkeypatch):
+    import hashlib
+    import os
+    import time
+
+    from hermes_cli import foreign_sessions_browser as browser
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    folder = tmp_path / ".claude" / "projects" / "project"
+    folder.mkdir(parents=True)
+    line = json.dumps({"type": "user", "sessionId": "s", "cwd": str(tmp_path),
+                       "message": {"role": "user", "content": "Hello"}})
+    (folder / "old.jsonl").write_text(line, encoding="utf-8")
+    recent = folder / "recent.jsonl"
+    recent.write_text(line, encoding="utf-8")
+    past = time.time() - 3 * 86400
+    os.utime(folder / "old.jsonl", (past, past))
+    recent_handle = hashlib.sha256(f"claude:{recent.resolve()}".encode()).hexdigest()
+
+    assert [row["id"] for row in browser.list_foreign_sessions(days=1)["sessions"]] == [recent_handle]
+    assert len(browser.list_foreign_sessions(days=30)["sessions"]) == 2
+    for bad in (0, 400, "1"):
+        with pytest.raises(ValueError):
+            browser.list_foreign_sessions(days=bad)

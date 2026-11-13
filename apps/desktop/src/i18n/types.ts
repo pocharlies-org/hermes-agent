@@ -327,6 +327,7 @@ export interface Translations extends NoticeTranslations {
     connectedComputer: string
     destination: string
     all: string
+    anyTime: string
     search: string
     scanning: string
     scanError: string

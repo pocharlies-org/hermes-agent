@@ -111,7 +111,7 @@ env:
 jobs:
   bundled-e2e:
     name: packaged bundle (open-app-update)
-    if: inputs.install-method == 'packaged-app' && inputs.update-method == 'open-app-update'
+    if: inputs.install-method == 'packaged-app' && inputs.update-method == 'open-app-update' && github.repository == 'NousResearch/hermes-agent'
     runs-on: ${{ inputs.bundle-arch == 'arm64' && 'windows-latest-32-arm-core' || 'windows-latest-32-core' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -179,6 +179,7 @@ jobs:
     #     desktop-bearing installs create.
     if: >-
       (inputs.install-method == 'installer-script'
+      && github.repository == 'NousResearch/hermes-agent'
         || (contains(fromJSON('["installer-script+desktop", "desktop-installer@latest"]'), inputs.install-method) && inputs.tag-has-desktop))
       && (contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
         || (contains(fromJSON('["installer-script+desktop", "hermes-desktop-app-update", "desktop-installer@latest"]'), inputs.update-method) && inputs.tag-has-desktop)

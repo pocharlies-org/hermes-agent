@@ -29,6 +29,7 @@ concurrency:
 
 jobs:
   core:
+    if: github.repository == 'NousResearch/hermes-agent'
     name: Desktop core E2E (Linux)
     runs-on: ubuntu-latest-32-core
     timeout-minutes: 30
