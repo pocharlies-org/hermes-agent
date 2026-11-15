@@ -1,6 +1,7 @@
-"""DGX-1471 (barrier of the DGX-698 security verdict): the `alarma` plugin's
-``ALARMA_HMAC_SECRET`` must never reach a spawned child through the terminal
-scrub surfaces.
+"""DGX-1471 (barrier of the DGX-698 security verdict) and DGX-1621: the HMAC keys
+plugins sign with in-process (``ALARMA_HMAC_SECRET`` of `alarma`,
+``VENTANA_HMAC_SECRET`` of `ventana-dgx3`) must never reach a spawned child
+through the terminal scrub surfaces.
 
 Measured on the live gateway pod (DGX-674 comments 47458/47464): a terminal
 child kept the name — ``_make_run_env`` (foreground terminal) never consulted
@@ -17,32 +18,36 @@ import pytest
 from tools.environments.local import _make_run_env, _sanitize_subprocess_env
 from tools.environments.local_env_policy import _ALWAYS_STRIP_KEYS
 
-_NAME = "ALARMA_HMAC_SECRET"
+_NAMES = ("ALARMA_HMAC_SECRET", "VENTANA_HMAC_SECRET")
 
 
-def test_alarma_hmac_name_is_tier1():
-    assert _NAME in _ALWAYS_STRIP_KEYS
+@pytest.mark.parametrize("name", _NAMES)
+def test_plugin_hmac_name_is_tier1(name):
+    assert name in _ALWAYS_STRIP_KEYS
 
 
-def test_sanitize_subprocess_env_strips_injected_name(monkeypatch):
-    monkeypatch.setenv(_NAME, "s3cr3t")
-    assert _NAME not in _sanitize_subprocess_env(dict(os.environ))
+@pytest.mark.parametrize("name", _NAMES)
+def test_sanitize_subprocess_env_strips_injected_name(name, monkeypatch):
+    monkeypatch.setenv(name, "s3cr3t")
+    assert name not in _sanitize_subprocess_env(dict(os.environ))
     # also via extra_env (the force-unwrap part of the scrub)
-    assert _NAME not in _sanitize_subprocess_env({}, {_NAME: "s3cr3t"})
+    assert name not in _sanitize_subprocess_env({}, {name: "s3cr3t"})
 
 
-def test_make_run_env_strips_injected_name(monkeypatch):
-    monkeypatch.setenv(_NAME, "s3cr3t")
-    assert _NAME not in _make_run_env({})
+@pytest.mark.parametrize("name", _NAMES)
+def test_make_run_env_strips_injected_name(name, monkeypatch):
+    monkeypatch.setenv(name, "s3cr3t")
+    assert name not in _make_run_env({})
     # the backend's own env dict is the other injection vector
-    assert _NAME not in _make_run_env({_NAME: "s3cr3t"})
+    assert name not in _make_run_env({name: "s3cr3t"})
 
 
-def test_force_prefix_does_not_reopen_tier1():
+@pytest.mark.parametrize("name", _NAMES)
+def test_force_prefix_does_not_reopen_tier1(name):
     """``_HERMES_FORCE_<NAME>`` forces blocklisted names through; Tier-1 stays
     sealed, matching the non-terminal surface's treatment of internal secrets."""
-    assert _NAME not in _sanitize_subprocess_env({}, {f"_HERMES_FORCE_{_NAME}": "x"})
-    assert _NAME not in _make_run_env({f"_HERMES_FORCE_{_NAME}": "x"})
+    assert name not in _sanitize_subprocess_env({}, {f"_HERMES_FORCE_{name}": "x"})
+    assert name not in _make_run_env({f"_HERMES_FORCE_{name}": "x"})
 
 
 def test_make_run_env_applies_plugin_strip_keys(monkeypatch):
