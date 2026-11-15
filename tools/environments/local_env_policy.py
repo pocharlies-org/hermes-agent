@@ -395,5 +395,8 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     # No spawned child consumes it; a terminal `python` reading os.environ must not
     # see it. The plugin signs in-process, so stripping children never breaks it.
     "ALARMA_HMAC_SECRET",
+    # Ventana-dgx3 plugin HMAC (DGX-1621): same shape as the alarma one — the `ventana-dgx3` plugin
+    # signs POST /api/llm/dgx3/mode/orden in-process; no child consumes it.
+    "VENTANA_HMAC_SECRET",
 }) | _ADAPTER_SECRET_ENV | _left_core_env(secrets_only=True)  # every declared adapter secret is Tier 1
 _ALWAYS_STRIP_FOLDED: frozenset[str] = frozenset(k.upper() for k in _ALWAYS_STRIP_KEYS)
