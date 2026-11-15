@@ -1,6 +1,7 @@
-"""DGX-1471 (barrier of the DGX-698 security verdict) and DGX-1621: the HMAC keys
-plugins sign with in-process (``ALARMA_HMAC_SECRET`` of `alarma`,
-``VENTANA_HMAC_SECRET`` of `ventana-dgx3`) must never reach a spawned child
+"""DGX-1471 (barrier of the DGX-698 security verdict), DGX-1621 and DGX-1628: the
+HMAC keys plugins sign with in-process (``ALARMA_HMAC_SECRET`` of `alarma`,
+``VENTANA_HMAC_SECRET`` of `ventana-dgx3`, and the `alerta_urgente`,
+`confirmar_pago` and `kiosco` ones) must never reach a spawned child
 through the terminal scrub surfaces.
 
 Measured on the live gateway pod (DGX-674 comments 47458/47464): a terminal
@@ -18,7 +19,9 @@ import pytest
 from tools.environments.local import _make_run_env, _sanitize_subprocess_env
 from tools.environments.local_env_policy import _ALWAYS_STRIP_KEYS
 
-_NAMES = ("ALARMA_HMAC_SECRET", "VENTANA_HMAC_SECRET")
+_NAMES = ("ALARMA_HMAC_SECRET", "VENTANA_HMAC_SECRET",
+          "ALERTA_URGENTE_HMAC_SECRET", "CONFIRMAR_PAGO_HMAC_SECRET",
+          "CONFIRMAR_PAGO_HMAC_DECISION_SECRET", "KIOSCO_HMAC_SECRET")
 
 
 @pytest.mark.parametrize("name", _NAMES)
