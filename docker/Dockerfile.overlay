@@ -1,10 +1,11 @@
 # Overlay image: the files this branch changes, on top of the live image.
-# Stacked overlay DGX-1621: base = fork-d923a5e-pef1bafd4 (the live tag of the chart: upstream
-# v0.22.2 + the 12-file overlay of this branch + DGX-1471 + SC-5381). Only the file DGX-1621
+# Stacked overlay DGX-1628: base = fork-d923a5e-pef1bafd4 (the live tag of the chart: upstream
+# v0.22.2 + the 12-file overlay of this branch + DGX-1471 + SC-5381). Only the file DGX-1628
 # changes is COPYed here:
-# - DGX-1621: tools/environments/local_env_policy.py — VENTANA_HMAC_SECRET (the HMAC the
-#   `ventana-dgx3` plugin signs with in-process) joins ALARMA_HMAC_SECRET in Tier-1, so no
-#   terminal child sees it.
+# - DGX-1628 (security condition, comment 54304): tools/environments/local_env_policy.py —
+#   ALERTA_URGENTE_HMAC_SECRET, CONFIRMAR_PAGO_HMAC_SECRET, CONFIRMAR_PAGO_HMAC_DECISION_SECRET
+#   and KIOSCO_HMAC_SECRET join the Tier-1 plugin HMACs (ALARMA, VENTANA — this file carries
+#   the DGX-1621 VENTANA strip too, still undeployed), so no terminal child sees them.
 # Verified on 15-11-2026 against the live pod hermes-gateway (image fork-d923a5e-pef1bafd4):
 # local_env_policy.py sha256 96119eb2198616dc…, identical to the fork point 957aaaff14.
 ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-pef1bafd4
