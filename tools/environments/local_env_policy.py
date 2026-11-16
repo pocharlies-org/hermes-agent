@@ -262,5 +262,11 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     # Ventana-dgx3 plugin HMAC (DGX-1621): same shape as the alarma one — the `ventana-dgx3` plugin
     # signs POST /api/llm/dgx3/mode/orden in-process; no child consumes it.
     "VENTANA_HMAC_SECRET",
+    # Plugin HMACs of the payment/urgent-alert/kiosk gates (DGX-1628, security condition
+    # comment 54304): `alerta_urgente`, `confirmar_pago` and `kiosco` sign their dashboard
+    # calls in-process with these; no child consumes them. The decision secret is the
+    # payment-confirmation signature itself — the most sensitive of the four.
+    "ALERTA_URGENTE_HMAC_SECRET", "CONFIRMAR_PAGO_HMAC_SECRET",
+    "CONFIRMAR_PAGO_HMAC_DECISION_SECRET", "KIOSCO_HMAC_SECRET",
 })
 _ALWAYS_STRIP_FOLDED: frozenset[str] = frozenset(k.upper() for k in _ALWAYS_STRIP_KEYS)
