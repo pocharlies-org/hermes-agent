@@ -1,3 +1,5 @@
+# health: allow FILE_LINES -- DGX-1621: +15 lines binding X-Hermes-User (the same change as main
+# PR #35); extracting a sibling module on the deploy lineage would cost more rebase than the feature.
 """OpenAI-compatible API server platform adapter (aiohttp).
 
 Serves /v1/chat/completions, /v1/responses, /v1/models, /v1/capabilities, /api/sessions,
