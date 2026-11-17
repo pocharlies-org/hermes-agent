@@ -1,13 +1,15 @@
 # Overlay image: the files this branch changes, on top of the live image.
-# Stacked overlay DGX-1628: base = fork-d923a5e-pef1bafd4 (the live tag of the chart: upstream
-# v0.22.2 + the 12-file overlay of this branch + DGX-1471 + SC-5381). Only the file DGX-1628
-# changes is COPYed here:
-# - DGX-1628 (security condition, comment 54304): tools/environments/local_env_policy.py —
-#   ALERTA_URGENTE_HMAC_SECRET, CONFIRMAR_PAGO_HMAC_SECRET, CONFIRMAR_PAGO_HMAC_DECISION_SECRET
-#   and KIOSCO_HMAC_SECRET join the Tier-1 plugin HMACs (ALARMA, VENTANA — this file carries
-#   the DGX-1621 VENTANA strip too, still undeployed), so no terminal child sees them.
-# Verified on 15-11-2026 against the live pod hermes-gateway (image fork-d923a5e-pef1bafd4):
-# local_env_policy.py sha256 96119eb2198616dc…, identical to the fork point 957aaaff14.
-ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-pef1bafd4
+# Stacked overlay DGX-1621 (X-Hermes-User): base = fork-d923a5e-pbce3c482 (the live tag of the
+# chart: upstream v0.22.2 + the 12-file overlay of this branch + DGX-1471 + SC-5381 + DGX-1628).
+# Only the two files this change touches are COPYed here:
+# - DGX-1621: gateway/platforms/api_server.py + gateway/platforms/api_server_runs.py —
+#   X-Hermes-User asserts the end-user of an authenticated client (the dashboard) and binds it
+#   as HERMES_SESSION_USER_ID of the turn, only on a validated Bearer (same change as main
+#   PR #35). The api_server.py of the live image is the branch's: last touched by 3a0d74546a
+#   (INFRA-439, pinned as p3a0d745 and carried by every later overlay), and api_server_runs.py
+#   by 2ff58849f4, an ancestor of the base build f9aa696c4c. sha256 on the live pod left to
+#   the deploy check (devops), same criterion as #32.
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-pbce3c482
 FROM ${BASE}
-COPY --chmod=644 tools/environments/local_env_policy.py /opt/hermes/tools/environments/local_env_policy.py
+COPY --chmod=644 gateway/platforms/api_server.py /opt/hermes/gateway/platforms/api_server.py
+COPY --chmod=644 gateway/platforms/api_server_runs.py /opt/hermes/gateway/platforms/api_server_runs.py

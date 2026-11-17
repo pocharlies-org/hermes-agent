@@ -501,6 +501,8 @@ class _RunLaunch:
     browser_control_principal: Any
     browser_control_transport_family: Any
     turn_author: Optional[dict[str, Any]] = None  # memory-attribution label only; grants nothing
+    # X-Hermes-User asserted by the authenticated client (DGX-1621); "" when not asserted.
+    user_id: str = ""
 
     @property
     def approval_session_key(self) -> str:
@@ -738,6 +740,7 @@ async def _handle_runs(self, request: web.Request, *, _api_server) -> web.Respon
         request_profile=_api_server._api_request_profile.get(),
         browser_control_principal=_api_server._api_request_browser_control_principal.get(),
         browser_control_transport_family=_api_server._api_request_browser_control_transport_family.get(),
+        user_id=_api_server._api_request_user_id.get(),
         turn_author=turn_author)
     self._activate_admitted_request()
     # A canonical Bot Chat that a Desktop holds live is that Desktop's to run: executing here would
@@ -815,7 +818,8 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
                 # so it stays default-denied until a merge contract exists for that chain;
                 # likewise a caller-supplied conversation_history is authoritative for the
                 # turn and never reads the delivery row, so it is denied the same way.
-                session_history_delivery="1" if run.session_history_delivery else "")
+                session_history_delivery="1" if run.session_history_delivery else "",
+                user_id=run.user_id)
             if session_tokens:
                 resets.append((session_tokens, clear_session_vars))
             if run.agent_kwargs["room_dispatch"] is not None:

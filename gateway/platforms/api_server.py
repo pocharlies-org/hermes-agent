@@ -1,3 +1,5 @@
+# health: allow FILE_LINES -- DGX-1621: +15 lines binding X-Hermes-User (the same change as main
+# PR #35); extracting a sibling module on the deploy lineage would cost more rebase than the feature.
 """OpenAI-compatible API server platform adapter (aiohttp).
 
 Serves /v1/chat/completions, /v1/responses, /v1/models, /v1/capabilities, /api/sessions,
@@ -50,6 +52,10 @@ _api_request_browser_control_principal: ContextVar[str] = ContextVar(
     "api_server_browser_control_principal", default="")
 _api_request_browser_control_transport_family: ContextVar[str] = ContextVar(
     "api_server_browser_control_transport_family", default="")
+# End-user identity the authenticated client asserts for the turn (``X-Hermes-User``, DGX-1621):
+# set in ``_check_auth`` ONLY on a validated Bearer (no-key and 401 branches leave it ""), read by
+# ``_run_agent`` and the /v1/runs launch. It is not the memory-attribution ``author`` body field.
+_api_request_user_id: ContextVar[str] = ContextVar("api_server_request_user_id", default="")
 
 class _ArtifactScopeFacade:
     """Minimal scope for ``artifact_scope_key``: server-derived principal + session + transport family."""
@@ -74,7 +80,8 @@ _STATIC_FEATURE_FLAGS = {
     "admin_config_rw": False, "jobs_admin": False, "memory_write_api": False,
     "skills_api": True, "audio_api": False, "realtime_voice": False,
     "session_continuity_header": "X-Hermes-Session-Id",
-    "session_key_header": "X-Hermes-Session-Key"}
+    "session_key_header": "X-Hermes-Session-Key",
+    "user_identity_header": "X-Hermes-User"}
 # /v1/capabilities "endpoints" table: name -> (method, path).
 _CAPABILITY_ENDPOINTS = (
     ("health", ("GET", "/health")), ("health_detailed", ("GET", "/health/detailed")),
@@ -1605,6 +1612,11 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             # Compare as bytes: compare_digest raises TypeError on non-ASCII str, and the
             # token is raw client input — a stray byte must 401, not 500.
             if hmac.compare_digest(token.encode(), expected_key.encode()):
+                # DGX-1621: the asserted end-user rides the turn only on a validated Bearer;
+                # the no-key branch above and the 401 below leave the ContextVar at "" (nothing
+                # bound). Sanitized like every other client-declared identity field.
+                from agent.turn_author import _clean_text
+                _api_request_user_id.set(_clean_text(request.headers.get("X-Hermes-User")) or "")
                 return None
         logger.warning("API server rejected invalid API key: %s", self._request_audit_log_suffix(request))
         return self._auth_failed_response()
@@ -4150,7 +4162,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
     def _bind_api_server_session(
         *, chat_id: str = "", session_key: str = "", session_id: str = "", profile: str = "",
         browser_control_principal: str = "", browser_control_transport_family: str = "",
-        session_history_delivery: str = "") -> list:
+        session_history_delivery: str = "", user_id: str = "") -> list:
         """Bind an API turn with push disabled and history delivery default-denied.
 
         Only routes whose continuation reads SessionDB may pass "1". An omitted
@@ -4158,12 +4170,16 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
 
         ``profile`` is the ``/p/<profile>/`` prefix serving the request (``""`` = default). It must
         reach ``HERMES_SESSION_PROFILE``: the persistent-Docker container key is derived from it, so an
-        unbound profile collapses every profile's turns onto the default sandbox (#96370)."""
+        unbound profile collapses every profile's turns onto the default sandbox (#96370).
+
+        ``user_id`` is the end-user the authenticated client asserted with ``X-Hermes-User``
+        (DGX-1621); ``""`` when nothing was asserted or the Bearer was not validated."""
         from gateway.session_context import set_session_vars
         return set_session_vars(
             platform="api_server", chat_id=chat_id, session_key=session_key, session_id=session_id,
             profile=profile, browser_control_principal=browser_control_principal,
             browser_control_transport_family=browser_control_transport_family,
+            user_id=user_id,
             async_delivery=False, cron_session="", session_history_delivery=session_history_delivery)
 
     def _turn_runtime_metadata(
@@ -4269,6 +4285,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         request_profile = _api_request_profile.get()
         request_browser_control_principal = _api_request_browser_control_principal.get()
         request_browser_control_transport_family = _api_request_browser_control_transport_family.get()
+        request_user_id = _api_request_user_id.get()
 
         def _run():
             from gateway.session_context import clear_session_vars
@@ -4278,7 +4295,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                     session_id=session_id or "", profile=request_profile or "",
                     browser_control_principal=request_browser_control_principal,
                     browser_control_transport_family=request_browser_control_transport_family,
-                    session_history_delivery=session_history_delivery)
+                    session_history_delivery=session_history_delivery, user_id=request_user_id)
                 agent = None
                 from agent.notification_presentation import notification_turn
                 from gateway.warning_notifications import diagnostic_turn_muted
