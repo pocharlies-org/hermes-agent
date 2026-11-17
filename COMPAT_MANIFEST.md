@@ -3863,3 +3863,20 @@ to the public equivalent or the new module. Test monkeypatch seams are likewise 
 | name | kind | new location |
 |---|---|---|
 | `types` | import | `types` |
+
+---
+
+## Cambios del fork (pocharlies-org) — coste de rebase
+
+No son upstream y no los genera `compat_manifest.json`: hay que re-aplicarlos en cada rebase
+del fork.
+
+- `gateway/platforms/api_server.py` + `gateway/platforms/api_server_runs.py` · **cabecera
+  `X-Hermes-User`** (DGX-1621): un cliente autenticado (el dashboard) afirma la identidad del
+  usuario final y llega a `HERMES_SESSION_USER_ID` del turno. Piezas: constante
+  `user_identity_header` en `_STATIC_FEATURE_FLAGS`, ContextVar `_api_request_user_id`, el `set`
+  en la rama de Bearer validado de `_check_auth` (sin key o con 401 no se liga nada),
+  `user_id=` en `_bind_api_server_session`/`_run_agent` y en `_RunLaunch`/`_run_agent_sync`.
+  Saneada con `agent.turn_author._clean_text`. NO es el campo `author` del cuerpo (etiqueta de
+  memoria, no identidad). Upstream toca todas esas zonas en cada tanda (auth, session bind,
+  capabilities): revisar al rebasear.
