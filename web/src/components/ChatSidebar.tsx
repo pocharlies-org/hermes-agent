@@ -88,7 +88,7 @@ const CONN_PILL: Record<ConnectionState, { cls: string; key: 'live' | 'connectin
 }
 
 /** Model capabilities as `/api/model/info` reports them (absent means unknown). */
-export interface PanelCaps {
+interface PanelCaps {
   context: number
   tools: boolean
   vision: boolean

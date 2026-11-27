@@ -1786,9 +1786,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   //   floating copy button — bottom-right corner, transparent with a
   //     subtle border; stays out of the way until hovered.  Sends
   //     `/copy\n` to Ink, which emits OSC 52 → our clipboard handler.
-  //   sidebar — ChatSidebar opens its own JSON-RPC sidecar; renders
-  //     model badge, tool-call list, model picker. Best-effort: if the
-  //     sidecar fails to connect the terminal pane keeps working.
+  //   panel — ChatPanelColumn (model card + session list; its ChatSidebar
+  //     opens its own JSON-RPC sidecar) or, collapsed, the PanelRail.
+  //     Best-effort: if the sidecar fails to connect the terminal pane
+  //     keeps working.
   //
   // Mobile model/tools sheet is portaled to `document.body` so it stacks
   // above the app sidebar (`z-50`) and mobile chrome (`z-40`).  The main

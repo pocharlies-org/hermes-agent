@@ -36,9 +36,8 @@ interface PanelBodyProps {
 export function ChatPanelColumn({
   label,
   onToggle,
-  onPicked,
   body,
-}: { body: PanelBodyProps; label: string; onToggle: () => void; onPicked?: () => void }) {
+}: { body: PanelBodyProps; label: string; onToggle: () => void }) {
   return (
     <aside
       id="chat-side-panel"
@@ -48,7 +47,7 @@ export function ChatPanelColumn({
     >
       <PanelHeader profile={body.profile} narrow={false} onToggle={onToggle} />
       <div className="hp min-h-0 flex-1 gap-2.5 overflow-hidden">
-        <PanelCards onPicked={onPicked} {...body} />
+        <PanelCards {...body} />
       </div>
     </aside>
   )

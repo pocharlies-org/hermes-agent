@@ -99,8 +99,6 @@ const apiMocks = vi.hoisted(() => ({
   // The collapsed rail (ChatSidePanel) reads model + effort over REST.
   getModelInfo: vi.fn(async () => ({ model: "qwen38-flash-next" })),
   getConfig: vi.fn(async () => ({ agent: { reasoning_effort: "low" } })),
-  setModelAssignment: vi.fn(async () => ({ confirm_required: false })),
-  getModelOptions: vi.fn(async () => []),
 }));
 const uploadChatImage = vi.hoisted(() =>
   vi.fn(async () => ({ path: "/tmp/pasted.png" })),
