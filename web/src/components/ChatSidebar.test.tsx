@@ -65,22 +65,8 @@ vi.mock('@/lib/gatewayClient', () => ({
 vi.mock('@/components/ModelPickerDialog', () => ({
   ModelPickerDialog: () => null
 }))
-vi.mock('@/components/ModelReloadConfirm', () => ({
-  ModelReloadConfirm: () => null
-}))
 vi.mock('@/components/ReasoningPicker', () => ({
   ReasoningPicker: () => null
-}))
-vi.mock('@nous-research/ui/ui/components/button', () => ({
-  Button: ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
-    <button onClick={onClick}>{children}</button>
-  )
-}))
-vi.mock('@nous-research/ui/ui/components/badge', () => ({
-  Badge: ({ children }: { children?: ReactNode }) => <span>{children}</span>
-}))
-vi.mock('@nous-research/ui/ui/components/card', () => ({
-  Card: ({ children }: { children?: ReactNode }) => <div>{children}</div>
 }))
 
 type EventLike = { code?: number; data?: string }
@@ -398,7 +384,7 @@ describe('ChatSidebar event socket reconnect', () => {
       FakeWebSocket.instances[1].emit('open', {})
     })
 
-    // Banner gone entirely — including the "Reconnect side panel" button,
+    // Banner gone entirely — including the "Reconnect panel" button,
     // which only renders while `error` is set.
     expect(container.textContent).not.toContain('Live tool activity')
   })
@@ -486,7 +472,7 @@ describe('ChatSidebar event socket reconnect', () => {
     await vi.waitFor(() => expect(container.textContent).toContain('Chat still works'))
     expect(container.textContent).not.toContain('WebSocket')
     const labels = Array.from(container.querySelectorAll('button')).map(b => b.textContent?.trim())
-    expect(labels).toContain('Reconnect side panel')
+    expect(labels).toContain('Reconnect panel')
   })
 
   it('still reconnects while a foreign banner suppresses its message', async () => {
@@ -519,7 +505,7 @@ describe('ChatSidebar event socket reconnect', () => {
       FakeWebSocket.instances[0].emit('close', { code: 1006 })
     })
     const reconnectButton = Array.from(container.querySelectorAll('button')).find(b =>
-      /reconnect side panel/i.test(b.textContent ?? '')
+      /reconnect panel/i.test(b.textContent ?? '')
     )
     expect(reconnectButton).toBeDefined()
     await act(async () => {

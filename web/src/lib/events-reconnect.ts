@@ -77,7 +77,7 @@ export function eventsRejectedMessage(code: number): string {
 }
 
 export function eventsGaveUpMessage(): string {
-  return `${EVENTS_FEED_PREFIX}stopped after ${EVENTS_MAX_RECONNECT_ATTEMPTS} reconnect attempts. Click Reconnect side panel, or reload the page.`
+  return `${EVENTS_FEED_PREFIX}stopped after ${EVENTS_MAX_RECONNECT_ATTEMPTS} reconnect attempts. Click Reconnect panel, or reload the page.`
 }
 
 /** True for the auth-rejection message, which needs a Reload button rather than Reconnect. */

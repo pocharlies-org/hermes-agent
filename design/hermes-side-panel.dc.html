@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes: panel lateral del chat (modelo y sesiones)</title>
+</head>
+<body>
+<x-dc data-theme="dark">
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TOKENS: nombres del template OWU-59 (dgx-infra,
+   k8s/apps/chat/tools/design_tokens_template.dc.html) con los
+   valores del producto. dark = tema «Hermes Teal» (default de
+   Hermes), light = tema «Nous Blue». En web/src no se copian
+   hex: cada valor sale de las variables del ThemeProvider
+   (--background-base, --midground-base, warmGlow); la fórmula
+   de cada token está en hermes-side-panel.handoff.md.
+   ============================================================ */
+[data-theme="dark"]{
+  --bg:#041c1c;--surface:#0e2423;--surface-2:#182c2a;--text:#ffe6cb;--muted:#a59d8c;--border:rgba(255,230,203,.10);--accent:#ffe6cb;--accent-2:#ffd898;
+  /* extras del panel: propuesta al template, declarados una vez */
+  --on-accent:#041c1c;--glow:rgba(255,189,56,.35);--ok:#4ade80;--warn:#ffbd38;--err:#fb2c36;--err-tx:#ff9a9a;
+  --hair:rgba(255,230,203,.08);--hair-2:rgba(255,230,203,.16);--shell:rgba(255,230,203,.035);--core:rgba(4,28,28,.80);--core-solid:#061d1d;--shade:rgba(0,8,8,.88);--hi:rgba(255,255,255,.06);
+  --term:#000000;--term-fg:#f0e6d2;--cv-bg:#021313;
+}
+[data-theme="light"]{
+  --bg:#E8F2FD;--surface:#f4f9fe;--surface-2:#dceafc;--text:#00339d;--muted:#0053FD;--border:rgba(0,83,253,.14);--accent:#0053FD;--accent-2:#0046d6;
+  --on-accent:#f4f9fe;--glow:rgba(0,83,253,.20);--ok:#16a34a;--warn:#b26b00;--err:#d61f2c;--err-tx:#b4141f;
+  --hair:rgba(0,83,253,.10);--hair-2:rgba(0,83,253,.20);--shell:rgba(0,83,253,.045);--core:rgba(247,251,255,.90);--core-solid:#f7fbff;--shade:rgba(0,40,120,.22);--hi:rgba(255,255,255,.9);
+  --term:#f5f8fc;--term-fg:#170d02;--cv-bg:#d6e4f6;
+}
+x-dc{display:block;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","IBM Plex Sans","Segoe UI",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono","IBM Plex Mono",Menlo,Consolas,monospace;
+  --theme-radius:8px;
+  --r-shell:calc(var(--theme-radius) * 2.5);--r-core:calc(var(--r-shell) - 5px);--r-row:calc(var(--theme-radius) * 1.25);--r-pill:calc(var(--theme-radius) * 999);
+  --spring:cubic-bezier(.32,.72,0,1);--out:cubic-bezier(.16,1,.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#021313}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+a{color:inherit;text-decoration:none}
+ul{list-style:none}
+svg.i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex:none;display:block}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- canvas (no es producto) ---------- */
+.cv{min-height:100vh;background:var(--cv-bg);color:var(--text);font-family:var(--sans);font-size:13px;line-height:1.45;padding:44px 48px 110px;-webkit-font-smoothing:antialiased;font-feature-settings:"tnum" 1;transition:background .6s var(--spring),color .6s var(--spring)}
+.cv-head{display:flex;align-items:flex-end;justify-content:space-between;gap:32px;max-width:1440px;padding-bottom:30px;box-shadow:inset 0 -1px 0 var(--hair)}
+.cv-head h1{font-weight:400;font-size:32px;line-height:1.1;letter-spacing:-.022em;max-width:26ch}
+.cv-head p{margin-top:12px;color:var(--muted);font-size:14px;line-height:1.55;max-width:74ch}
+.cv-mode{flex:none;position:relative;display:flex;align-items:center;padding:4px;border-radius:999px;background:var(--shell);box-shadow:inset 0 0 0 1px var(--hair-2),inset 0 1px 0 var(--hi),0 14px 40px -16px var(--shade)}
+.cv-mode button{position:relative;z-index:1;height:32px;padding:0 16px;border-radius:999px;font-size:13px;color:var(--muted);transition:color .4s var(--spring)}
+.cv-mode button[aria-checked=true]{color:var(--on-accent)}
+.cv-mode-ind{position:absolute;top:4px;left:4px;height:32px;border-radius:999px;background:linear-gradient(180deg,var(--accent),var(--accent-2));box-shadow:0 0 22px var(--glow);transition:transform .7s var(--spring),width .7s var(--spring)}
+.cv-frame{margin-top:72px;max-width:1440px}
+.cv-cap{display:grid;grid-template-columns:72px 1fr;gap:6px 0;align-items:baseline;margin-bottom:18px}
+.cv-cap .n{font:12px var(--mono);color:var(--muted)}
+.cv-cap h2{font-weight:500;font-size:17px;letter-spacing:-.01em}
+.cv-cap p{grid-column:2;color:var(--muted);font-size:13px;line-height:1.55;max-width:92ch}
+.cv-board{position:relative;overflow:hidden;border-radius:18px;background:var(--bg);color:var(--text);box-shadow:0 0 0 1px var(--hair-2),0 60px 120px -50px var(--shade)}
+.cv-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 40px;margin:20px 0 0 72px;max-width:1100px}
+.cv-legend li{display:grid;grid-template-columns:22px 1fr;gap:10px;font-size:12.5px;color:var(--muted);line-height:1.5}
+.cv-legend b{color:var(--text);font-weight:500}
+.cv-legend .mk{position:static}
+.mk{position:absolute;z-index:6;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font:600 10.5px var(--mono);color:var(--on-accent);background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 20%,transparent),0 6px 16px -4px var(--shade)}
+.cv-sub{font-size:12px;color:var(--muted);margin-bottom:10px}
+
+/* ---------- contexto: la app de Hermes alrededor (atenuada) ---------- */
+.ap{display:grid;grid-template-columns:240px 1fr;height:100%}
+.ap-nav{display:flex;flex-direction:column;gap:2px;padding:18px 14px;box-shadow:inset -1px 0 0 var(--hair);opacity:.72}
+.ap-brand{font-weight:600;letter-spacing:.18em;font-size:13px;padding:6px 10px 16px}
+.ap-prof{display:flex;align-items:center;justify-content:space-between;height:36px;padding:0 10px;margin-bottom:12px;border-radius:var(--r-row);box-shadow:inset 0 0 0 1px var(--hair-2);font-size:12.5px}
+.ap-prof span{color:var(--muted)}
+.ap-item{display:flex;align-items:center;height:34px;padding:0 10px;border-radius:var(--r-row);color:var(--muted);font-size:13px}
+.ap-item.on{background:var(--surface-2);color:var(--text)}
+.ap-foot{margin-top:auto;padding:10px;font-size:12px;color:var(--muted);line-height:1.6}
+.ap-foot b{font-weight:500;color:var(--ok)}
+.ap-main{display:flex;flex-direction:column;min-width:0;min-height:0;padding:16px 24px 20px;gap:12px}
+.ap-top{display:flex;align-items:center;gap:12px;height:36px;flex:none}
+.ap-top h3{font-weight:500;font-size:15px;letter-spacing:-.005em}
+.ap-top span{color:var(--muted);font-size:12.5px}
+.ap-row{display:flex;gap:12px;flex:1;min-height:0}
+.term{position:relative;flex:1;min-width:0;border-radius:var(--r-shell);background:var(--term);color:var(--term-fg);font:12.5px/1.7 var(--mono);padding:18px 22px;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.4);overflow:hidden}
+.term .bar{opacity:.5;padding-bottom:12px;margin-bottom:12px;box-shadow:inset 0 -1px 0 color-mix(in srgb,var(--term-fg) 12%,transparent)}
+.term .u{opacity:1;font-weight:500}
+.term .d{opacity:.55}
+.term .tl{opacity:.62}
+.term .tl b{font-weight:400;opacity:1}
+.term .g{padding-left:16px}
+.term .gap{height:12px}
+.term .in{margin-top:auto;padding-top:12px;box-shadow:inset 0 1px 0 color-mix(in srgb,var(--term-fg) 12%,transparent)}
+.term .car{display:inline-block;width:8px;height:15px;vertical-align:-2px;background:var(--term-fg);animation:car 1.1s steps(1) infinite}
+@keyframes car{50%{opacity:0}}
+.term-copy{position:absolute;right:14px;bottom:14px;font:11.5px var(--sans);padding:5px 9px;border-radius:8px;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--term-fg) 28%,transparent);opacity:.6}
+
+/* ---------- el panel (prefijo hp-) ---------- */
+.hp{display:flex;flex-direction:column;gap:10px;width:328px;flex:none;min-height:0}
+.hp-top{display:flex;align-items:center;justify-content:space-between;height:32px;padding:0 2px 0 10px;flex:none}
+.hp-top b{font-weight:500;font-size:13px}
+.hp-top span{color:var(--muted);font-size:12px;margin-left:7px}
+.hp-ib{width:30px;height:30px;border-radius:var(--r-pill);display:grid;place-items:center;color:var(--muted);transition:background .3s var(--spring),color .3s var(--spring),transform .3s var(--spring)}
+.hp-ib:hover,.hp-ib.is-hover{background:var(--surface-2);color:var(--text)}
+.hp-ib:active,.hp-ib.is-press{transform:scale(.92)}
+.hp-ib.is-focus{outline:2px solid var(--accent);outline-offset:2px}
+.hp-ib.spin svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hp-shell{position:relative;padding:5px;border-radius:var(--r-shell);background:var(--shell);box-shadow:inset 0 0 0 1px var(--hair),0 40px 90px -30px var(--shade);backdrop-filter:blur(24px) saturate(1.3);-webkit-backdrop-filter:blur(24px) saturate(1.3);flex:none}
+.hp-core{position:relative;border-radius:var(--r-core);background:var(--core);box-shadow:inset 0 1px 0 var(--hi);overflow:hidden}
+.hp-shell.err{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--err) 40%,transparent),0 40px 90px -30px var(--shade)}
+.hp-shell.warn{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--warn) 40%,transparent),0 40px 90px -30px var(--shade)}
+
+/* modelo */
+.hp-model{padding:14px 16px 16px;isolation:isolate}
+.hp-model::before{content:"";position:absolute;left:-70px;top:-80px;width:300px;height:220px;background:radial-gradient(closest-side,var(--glow),transparent);opacity:.5;z-index:-1;pointer-events:none}
+.hp-r1{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hp-k{color:var(--muted);font-size:12px}
+.hp-live{display:inline-flex;align-items:center;gap:7px;height:22px;padding:0 9px 0 8px;border-radius:var(--r-pill);font-size:11.5px;color:var(--muted);background:color-mix(in srgb,var(--text) 6%,transparent)}
+.hp-live i{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:live 2s var(--out) infinite}
+.hp-live.warn i{background:var(--warn);animation:none}
+.hp-live.err i{background:var(--err);animation:none}
+.hp-live.err{color:var(--err-tx)}
+@keyframes live{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 60%,transparent)}100%{box-shadow:0 0 0 9px color-mix(in srgb,var(--ok) 0%,transparent)}}
+.hp-pick{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;margin-top:8px;text-align:left;border-radius:12px}
+.hp-pick strong{min-width:0;font-weight:400;font-size:21px;line-height:1.2;letter-spacing:-.02em;text-shadow:0 0 28px var(--glow);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hp-pick .c{flex:none;width:30px;height:30px;border-radius:var(--r-pill);display:grid;place-items:center;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--hair);transition:transform .45s var(--spring),background .3s var(--spring)}
+.hp-pick:hover .c{transform:translateY(1px) scale(1.06);background:color-mix(in srgb,var(--text) 14%,transparent)}
+.hp-prov{font:11.5px/1.4 var(--mono);color:var(--muted);margin-top:3px}
+.hp-caps{display:flex;align-items:center;gap:6px;margin-top:14px;flex-wrap:wrap}
+.hp-ctx{display:inline-flex;align-items:baseline;gap:5px;margin-right:6px}
+.hp-ctx b{font-weight:300;font-size:22px;letter-spacing:-.03em;line-height:1}
+.hp-ctx small{font-size:11.5px;color:var(--muted)}
+.hp-tag{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:var(--r-pill);font-size:11.5px;color:var(--muted);background:color-mix(in srgb,var(--text) 6%,transparent)}
+.hp-sep{height:1px;margin:14px 0 12px;background:linear-gradient(90deg,transparent,var(--hair-2) 14%,var(--hair-2) 86%,transparent)}
+.hp-eff-h{display:flex;justify-content:space-between;align-items:baseline}
+.hp-eff-h b{font-weight:500;font-size:13px;text-shadow:0 0 18px var(--glow)}
+.hp-eff-h em{font-style:normal;font:11px var(--mono);color:var(--muted);margin-right:8px}
+.hp-eff{--v:2;position:relative;height:28px;margin-top:6px;cursor:pointer;border-radius:8px;touch-action:none}
+.hp-eff-rail{position:absolute;left:7px;right:7px;top:13px;height:2px;border-radius:2px;background:var(--hair-2)}
+.hp-eff-fill{position:absolute;inset:0;border-radius:2px;background:linear-gradient(90deg,var(--accent),var(--accent-2));transform-origin:left;transform:scaleX(calc(var(--v) / 7));box-shadow:0 0 12px var(--glow);transition:transform .5s var(--spring)}
+.hp-eff-ticks{position:absolute;left:5px;right:5px;top:12px;height:4px;display:flex;justify-content:space-between}
+.hp-eff-ticks i{width:4px;height:4px;border-radius:50%;background:var(--hair-2);transition:background .3s var(--spring)}
+.hp-eff-ticks i.on{background:var(--accent)}
+.hp-eff-thumb{position:absolute;left:7px;right:7px;top:7px;height:14px;transform:translateX(calc(var(--v) / 7 * 100%));transition:transform .5s var(--spring);pointer-events:none}
+.hp-eff-thumb::after{content:"";position:absolute;left:-7px;top:0;width:14px;height:14px;border-radius:50%;background:radial-gradient(circle,var(--accent) 0 2.5px,var(--core-solid) 3px);box-shadow:0 0 0 1.5px var(--accent),0 0 14px var(--glow);transition:transform .3s var(--spring)}
+.hp-eff:hover .hp-eff-thumb::after{transform:scale(1.12)}
+.hp-eff.is-focus{outline:2px solid var(--accent);outline-offset:2px}
+.hp-eff.saving .hp-eff-thumb::after{animation:pulse 1s var(--out) infinite}
+@keyframes pulse{50%{transform:scale(.82)}}
+.hp-eff-ax{display:flex;justify-content:space-between;font:10.5px var(--mono);color:var(--muted)}
+.hp-none{font-size:12px;color:var(--muted);line-height:1.5}
+.hp-pend{margin:14px -16px -16px;padding:12px 16px 14px;background:color-mix(in srgb,var(--warn) 9%,transparent);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--warn) 32%,transparent)}
+.hp-pend p{font-size:12.5px;line-height:1.5}
+.hp-pend p b{font-weight:500}
+.hp-acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.hp-btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:var(--r-pill);font-size:12.5px;font-weight:500;color:var(--text);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--hair-2);transition:transform .3s var(--spring),background .3s var(--spring);white-space:nowrap}
+.hp-btn:hover{background:color-mix(in srgb,var(--text) 12%,transparent)}
+.hp-btn:active{transform:scale(.97)}
+.hp-btn.pri{background:linear-gradient(180deg,var(--accent),var(--accent-2));color:var(--on-accent);box-shadow:0 0 18px var(--glow),inset 0 1px 0 rgba(255,255,255,.3)}
+.hp-btn.ghost{background:transparent;box-shadow:none;color:var(--muted)}
+.hp-btn.ghost:hover{color:var(--text)}
+.hp-btn svg{width:14px;height:14px}
+
+/* avisos */
+.hp-alert{display:grid;grid-template-columns:16px 1fr;gap:10px;padding:12px 14px 14px}
+.hp-alert>svg{margin-top:1px;color:var(--err)}
+.hp-alert.warn>svg{color:var(--warn)}
+.hp-alert p{font-size:12.5px;line-height:1.5}
+.hp-alert p b{font-weight:500}
+.hp-alert p span{color:var(--muted)}
+.hp-alert .hp-acts{margin-top:10px}
+
+/* sesiones */
+.hp-ses{flex:1;min-height:0;display:flex}
+.hp-ses>.hp-core{flex:1;min-height:0;display:flex;flex-direction:column}
+.hp-ses-h{display:flex;align-items:center;justify-content:space-between;padding:12px 8px 8px 16px;flex:none}
+.hp-ses-h b{font-weight:500;font-size:14px}
+.hp-ses-h em{font-style:normal;font:12px var(--mono);color:var(--muted);margin-left:8px}
+.hp-ses-cta{padding:0 10px 6px;flex:none}
+.hp-cta{display:flex;align-items:center;justify-content:space-between;width:100%;height:42px;padding:0 6px 0 16px;border-radius:var(--r-pill);background:linear-gradient(180deg,var(--accent),var(--accent-2));color:var(--on-accent);font-weight:500;font-size:13.5px;box-shadow:0 12px 30px -12px var(--glow),inset 0 1px 0 rgba(255,255,255,.35);transition:transform .3s var(--spring),box-shadow .4s var(--spring)}
+.hp-cta i{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:color-mix(in srgb,var(--on-accent) 12%,transparent);transition:transform .45s var(--spring)}
+.hp-cta:hover i,.hp-cta.is-hover i{transform:translate(2px,-1px) scale(1.06)}
+.hp-cta:hover,.hp-cta.is-hover{box-shadow:0 14px 36px -10px var(--glow),inset 0 1px 0 rgba(255,255,255,.35)}
+.hp-cta:active,.hp-cta.is-press{transform:scale(.98)}
+.hp-cta.is-focus{outline:2px solid var(--accent);outline-offset:3px}
+.hp-list{flex:1;min-height:0;overflow:auto;padding:0 6px 6px;scrollbar-width:thin;scrollbar-color:var(--hair-2) transparent;-webkit-mask-image:linear-gradient(180deg,transparent,#000 8px,#000 calc(100% - 26px),transparent);mask-image:linear-gradient(180deg,transparent,#000 8px,#000 calc(100% - 26px),transparent)}
+.hp-grp{position:sticky;top:0;z-index:1;padding:10px 10px 4px;font-size:12px;font-weight:500;color:var(--muted);background:linear-gradient(180deg,var(--core-solid) 72%,color-mix(in srgb,var(--core-solid) 0%,transparent))}
+.hp-row{position:relative;display:grid;grid-template-columns:8px minmax(0,1fr) auto;column-gap:10px;padding:8px 10px 9px 8px;border-radius:var(--r-row);cursor:pointer;transition:background .25s var(--spring)}
+.hp-row:hover,.hp-row.is-hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+.hp-row:hover .t,.hp-row.is-hover .t{transform:translateX(2px)}
+.hp-row[aria-current]{background:var(--surface-2)}
+.hp-row[aria-current]::before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:2px;border-radius:2px;background:var(--accent);box-shadow:0 0 10px var(--glow)}
+.hp-row:focus-visible,.hp-row.is-focus{outline:2px solid var(--accent);outline-offset:-2px}
+.hp-row .st{padding-top:7px}
+.hp-row .st i{display:block;width:6px;height:6px;border-radius:50%;background:var(--ok);animation:live 2s var(--out) infinite}
+.hp-row .b{min-width:0}
+.hp-row .t{display:block;font-size:13px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:transform .35s var(--spring)}
+.hp-row .t.pv{color:var(--muted)}
+.hp-row[aria-current] .t{font-weight:500}
+.hp-row .m{display:flex;align-items:center;gap:10px;margin-top:3px;font:11px/1.3 var(--mono);color:var(--muted);white-space:nowrap}
+.hp-row .m .src{display:inline-flex;align-items:center;gap:5px}
+.hp-row .m svg{width:12px;height:12px}
+.hp-row .r{font:11px/1.35 var(--mono);color:var(--muted);padding-top:2px;white-space:nowrap;text-align:right}
+.hp-all{display:flex;align-items:center;justify-content:space-between;margin:2px 8px 6px;padding:10px 8px;box-shadow:inset 0 1px 0 var(--hair);font-size:12.5px;color:var(--muted);flex:none;border-radius:0 0 var(--r-row) var(--r-row);transition:color .3s var(--spring)}
+.hp-all:hover{color:var(--text)}
+.hp-all svg{width:14px;height:14px;transition:transform .45s var(--spring)}
+.hp-all:hover svg{transform:translate(2px,-2px)}
+.hp-empty{padding:26px 18px 30px;text-align:left}
+.hp-empty b{display:block;font-weight:400;font-size:17px;letter-spacing:-.01em;line-height:1.3}
+.hp-empty p{margin-top:8px;color:var(--muted);font-size:12.5px;line-height:1.5}
+.sk{display:block;height:9px;border-radius:5px;background:linear-gradient(90deg,var(--hair) 0%,var(--hair-2) 40%,var(--hair) 80%);background-size:240% 100%;animation:sk 1.6s var(--out) infinite}
+@keyframes sk{from{background-position:120% 0}to{background-position:-120% 0}}
+.sk-row{display:grid;grid-template-columns:8px 1fr 34px;column-gap:10px;padding:11px 10px 11px 8px}
+.sk-row .sk+.sk{margin-top:7px}
+
+/* plegado: riel HUD */
+.hp-rail{width:56px;flex:none;display:flex;flex-direction:column;gap:10px}
+.hp-rail .hp-shell{flex:1;display:flex}
+.hp-rail .hp-core{flex:1;display:flex;flex-direction:column;align-items:center;gap:14px;padding:10px 0 12px;overflow:visible}
+.hp-rail .hp-live{width:26px;height:26px;padding:0;justify-content:center}
+.hp-mono{width:38px;height:38px;border-radius:calc(var(--theme-radius) * 1.5);display:grid;place-items:center;font:500 11.5px var(--mono);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--hair-2);text-shadow:0 0 14px var(--glow);cursor:pointer}
+.hp-vm{display:flex;flex-direction:column-reverse;gap:4px;padding:4px 0}
+.hp-vm i{width:14px;height:3px;border-radius:2px;background:var(--hair-2)}
+.hp-vm i.on{background:var(--accent);box-shadow:0 0 8px var(--glow)}
+.hp-rsep{width:22px;height:1px;background:var(--hair-2)}
+.hp-rcta{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(180deg,var(--accent),var(--accent-2));color:var(--on-accent);box-shadow:0 0 18px var(--glow)}
+.hp-tip{position:absolute;z-index:5;padding:9px 12px 10px;border-radius:14px;font-size:12.5px;line-height:1.45;background:var(--core-solid);box-shadow:inset 0 0 0 1px var(--hair-2),0 18px 40px -12px var(--shade);white-space:nowrap}
+.hp-tip b{display:block;font-weight:500}
+.hp-tip span{color:var(--muted);font:11.5px var(--mono)}
+
+/* móvil */
+.mb{position:relative;width:390px;height:844px;overflow:hidden;background:var(--bg);border-radius:34px;box-shadow:0 0 0 1px var(--hair-2),0 40px 100px -40px var(--shade);flex:none}
+.mb-head{height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 10px 0 14px;box-shadow:inset 0 -1px 0 var(--hair)}
+.mb-head .ham{width:34px;height:34px;display:grid;place-items:center;color:var(--muted)}
+.mb-head h3{flex:1;min-width:0;font-weight:500;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mb-trig{display:inline-flex;align-items:center;gap:8px;height:34px;max-width:176px;padding:0 9px 0 11px;border-radius:var(--r-pill);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--hair-2);font-size:12.5px;flex:none}
+.mb-trig i{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none;animation:live 2s var(--out) infinite}
+.mb-trig span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mb-trig svg{width:14px;height:14px;color:var(--muted)}
+.mb-body{position:absolute;inset:56px 0 0;padding:10px}
+.mb-body .term{height:100%;font-size:11.5px;padding:14px 14px;border-radius:calc(var(--r-shell) - 4px)}
+.mb-scrim{position:absolute;inset:0;background:color-mix(in srgb,var(--bg) 55%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.mb-sheet{position:absolute;left:0;right:0;bottom:0;height:88%;padding:6px 6px 0;border-radius:28px 28px 0 0;background:var(--shell);backdrop-filter:blur(24px) saturate(1.3);-webkit-backdrop-filter:blur(24px) saturate(1.3);box-shadow:inset 0 0 0 1px var(--hair-2),0 -30px 80px -20px var(--shade)}
+.mb-sheet>.in{height:100%;border-radius:23px 23px 0 0;background:var(--core-solid);box-shadow:inset 0 1px 0 var(--hi);display:flex;flex-direction:column;overflow:hidden}
+.mb-grab{width:38px;height:4px;border-radius:2px;background:var(--hair-2);margin:8px auto 2px;flex:none}
+.mb-sheet .hp-top{padding:4px 8px 0 18px;height:40px}
+.mb-sheet .hp-model{padding:10px 18px 14px}
+.mb-sheet .hp-sep.full{margin:0 18px}
+
+/* fichas de tokens */
+.tk{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.tk-sw{padding:12px;border-radius:14px;background:var(--surface);box-shadow:inset 0 0 0 1px var(--hair)}
+.tk-sw i{display:block;height:44px;border-radius:9px;box-shadow:inset 0 0 0 1px var(--hair-2);margin-bottom:10px}
+.tk-sw b{font:500 12px var(--mono)}
+.tk-sw span{display:block;font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.45}
+.tk-h{font-weight:500;font-size:14px;margin:30px 0 12px}
+.tk-h:first-child{margin-top:0}
+.tk-type{display:grid;grid-template-columns:150px 1fr;gap:10px 24px;align-items:baseline}
+.tk-type dt{font:11.5px var(--mono);color:var(--muted)}
+.tk-row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.tk-rad{width:92px;height:64px;background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--hair-2)}
+.tk-cap{font:11px var(--mono);color:var(--muted);margin-top:6px}
+.tk-comp li{display:grid;grid-template-columns:200px 1fr;gap:16px;padding:9px 0;box-shadow:inset 0 -1px 0 var(--hair);font-size:12.5px;line-height:1.5}
+.tk-comp li b{font:500 12px var(--mono)}
+.tk-comp li span{color:var(--muted)}
+
+.term>div{white-space:pre}
+.st-grid{display:grid;grid-template-columns:repeat(4,328px);gap:32px;justify-content:center}
+.st-col .hp{height:700px}
+.st-col .cv-sub{height:20px}
+.ix{display:grid;grid-template-columns:328px 1fr;gap:56px;padding:32px 40px 40px}
+.ix-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 40px;align-content:start}
+.ix-set{display:flex;flex-direction:column;gap:8px}
+.ix-set h4{font-weight:500;font-size:13px;margin-bottom:2px}
+.ix-cell{display:grid;grid-template-columns:96px 1fr;align-items:center;gap:14px}
+.ix-cell>span{font:11px var(--mono);color:var(--muted)}
+.ix-panel{padding:6px;border-radius:var(--r-core);background:var(--core-solid);box-shadow:inset 0 0 0 1px var(--hair)}
+.mb-wrap{display:grid;grid-template-columns:390px 390px 1fr;gap:48px;padding:36px 40px 40px;align-items:start}
+.mb .hp-ib{width:40px;height:40px}
+.mb .hp-row{padding:10px 10px 11px 8px}
+.mb-notes h4{font-weight:500;font-size:14px;margin-bottom:12px}
+.mb-notes li{display:grid;grid-template-columns:96px 1fr;gap:14px;padding:11px 0;box-shadow:inset 0 -1px 0 var(--hair);font-size:12.5px;line-height:1.55;color:var(--muted)}
+.mb-notes li b{font:500 11.5px var(--mono);color:var(--text)}
+.mb-notes li:first-of-type{padding-top:0}
+@media (prefers-reduced-transparency:reduce){.hp-shell,.mb-sheet{background:var(--core-solid);backdrop-filter:none;-webkit-backdrop-filter:none}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+</style>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var root = document.querySelector('x-dc');
+  var mode = document.querySelector('.cv-mode');
+  function moveInd() {
+    if (!mode) return;
+    var on = mode.querySelector('[aria-checked=true]');
+    var ind = mode.querySelector('.cv-mode-ind');
+    if (!on || !ind) return;
+    ind.style.width = on.offsetWidth + 'px';
+    ind.style.transform = 'translateX(' + (on.offsetLeft - 4) + 'px)';
+  }
+  document.querySelectorAll('[data-set-theme]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.setAttribute('data-theme', b.getAttribute('data-set-theme'));
+      document.querySelectorAll('[data-set-theme]').forEach(function (x) { x.setAttribute('aria-checked', String(x === b)); });
+      moveInd();
+    });
+  });
+  moveInd();
+  var L = ['Apagado', 'Mínimo', 'Bajo', 'Medio', 'Alto', 'Extra alto', 'Máximo', 'Ultra'];
+  document.querySelectorAll('.hp-eff').forEach(function (el) {
+    function set(v) {
+      v = Math.max(0, Math.min(7, v));
+      el.style.setProperty('--v', v);
+      el.setAttribute('aria-valuenow', v);
+      el.setAttribute('aria-valuetext', L[v]);
+      var w = el.closest('.hp-effw');
+      var lab = w && w.querySelector('[data-eff-label]');
+      if (lab) lab.textContent = L[v];
+      el.querySelectorAll('.hp-eff-ticks i').forEach(function (t, i) { t.classList.toggle('on', i <= v); });
+    }
+    el.addEventListener('click', function (e) {
+      var r = el.getBoundingClientRect();
+      set(Math.round((e.clientX - r.left - 7) / (r.width - 14) * 7));
+    });
+    el.addEventListener('keydown', function (e) {
+      var v = +el.getAttribute('aria-valuenow');
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { set(v + 1); e.preventDefault(); }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { set(v - 1); e.preventDefault(); }
+      if (e.key === 'Home') { set(0); e.preventDefault(); }
+      if (e.key === 'End') { set(7); e.preventDefault(); }
+    });
+  });
+  document.querySelectorAll('.hp-list[data-pick]').forEach(function (list) {
+    list.addEventListener('click', function (e) {
+      var row = e.target.closest('.hp-row');
+      if (!row) return;
+      e.preventDefault();
+      list.querySelectorAll('.hp-row[aria-current]').forEach(function (r) { r.removeAttribute('aria-current'); });
+      row.setAttribute('aria-current', 'true');
+    });
+  });
+});
+</script>
+</helmet>
+<div class="cv">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- iconos: trazados de lucide-react 1.7 (ya es dependencia de web/), trazo 1.5 -->
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-chev-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-panel-close" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/></symbol>
+  <symbol id="i-panel-open" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-hook" viewBox="0 0 24 24"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></symbol>
+</svg>
+
+<header class="cv-head">
+  <div>
+    <h1>Panel lateral del chat de Hermes: modelo y sesiones</h1>
+    <p>El panel <code>chat-side-panel</code> rediseñado con el lenguaje de /vivo (cristal de doble bisel, filetes, cifras finas con halo, muelles en el movimiento) sobre los tokens del tema activo de Hermes. Seis frames: escritorio, estados, plegado, claro e interacción, móvil y tokens. Datos de ejemplo.</p>
+  </div>
+  <div class="cv-mode" role="radiogroup" aria-label="Tema del canvas">
+    <span class="cv-mode-ind" aria-hidden="true"></span>
+    <button role="radio" aria-checked="true" data-set-theme="dark">Hermes Teal</button>
+    <button role="radio" aria-checked="false" data-set-theme="light">Nous Blue</button>
+  </div>
+</header>
+
+<section class="cv-frame" id="f1">
+  <div class="cv-cap">
+    <span class="n">Frame 1</span><h2>Escritorio, 1440 × 900: el panel abierto junto al terminal</h2>
+    <p>328 px de ancho (hoy 240). Dos piezas de cristal de doble bisel: arriba el modelo, abajo las sesiones, que llenan el alto. El terminal toma el mismo radio que la concha. La app alrededor sale atenuada: es contexto, no se rediseña.</p>
+  </div>
+  <div class="cv-board" style="height:900px">
+    <div class="ap">
+      <nav class="ap-nav" aria-label="Navegación de la app (contexto)">
+        <div class="ap-brand">HERMES</div>
+        <div class="ap-prof"><span>Perfil</span>main</div>
+        <a class="ap-item on" href="#">Chat</a>
+        <a class="ap-item" href="#">Sesiones</a>
+        <a class="ap-item" href="#">Modelos</a>
+        <a class="ap-item" href="#">Skills</a>
+        <a class="ap-item" href="#">Cron</a>
+        <a class="ap-item" href="#">Canales</a>
+        <a class="ap-item" href="#">MCP</a>
+        <a class="ap-item" href="#">Configuración</a>
+        <a class="ap-item" href="#">Registros</a>
+        <div class="ap-foot">Gateway <b>en marcha</b><br>Sesiones activas: 2</div>
+      </nav>
+      <div class="ap-main">
+        <div class="ap-top"><h3>Ubicaciones de la estantería L</h3><span>Chat</span></div>
+        <div class="ap-row">
+          <div class="term" aria-label="Terminal del chat (contexto)">
+            <div class="bar">hermes  main  qwen38-flash-next, razonamiento bajo</div>
+            <div class="u">› ¿Qué hay ahora en la L1-21 y qué falta por ubicar del pedido de JIA DYI?</div>
+            <div class="gap"></div>
+            <div class="tl g">⚙ <b>picker_warehouse_shelf</b>  L1-21                                  0,4 s</div>
+            <div class="tl g">⚙ <b>picker_warehouse_product</b>  SP-HICAPA-51                        0,3 s</div>
+            <div class="gap"></div>
+            <div class="g">En la L1-21 hay tres referencias:</div>
+            <div class="g">  SP-HICAPA-51   Hi-Capa 5.1, cañón 112 mm      6 uds</div>
+            <div class="g">  SP-HICAPA-43   Hi-Capa 4.3, corredera         2 uds</div>
+            <div class="g">  SP-VIPER-07    Funda Viper para cargador     11 uds</div>
+            <div class="g">Del pedido a JIA DYI faltan por ubicar dos líneas (gatillos y guías).</div>
+            <div class="g">¿Las dejo en la L1-22, que tiene hueco?</div>
+            <div class="gap"></div>
+            <div class="u">› sí, a la L1-22</div>
+            <div class="gap"></div>
+            <div class="tl g">⚙ <b>picker_warehouse_move</b>  2 líneas → L1-22                      0,6 s</div>
+            <div class="g">Hecho. Las dos líneas están en la L1-22 y Picqer ya lo refleja.</div>
+            <div class="in">› <span class="car"></span></div>
+            <span class="term-copy">copiar la última respuesta</span>
+          </div>
+
+          <aside class="hp" role="complementary" aria-label="Modelo y herramientas">
+            <div class="hp-top">
+              <div><b>main</b><span>perfil de este chat</span></div>
+              <button class="hp-ib" aria-label="Plegar el panel" title="Plegar el panel"><svg class="i"><use href="#i-panel-close"/></svg></button>
+            </div>
+
+            <div class="hp-shell">
+              <div class="hp-core hp-model">
+                <div class="hp-r1"><span class="hp-k">Modelo</span><span class="hp-live" role="status"><i></i>en vivo</span></div>
+                <button class="hp-pick" aria-haspopup="dialog" title="Cambiar de modelo"><strong>qwen38-flash-next</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button>
+                <div class="hp-prov">custom</div>
+                <div class="hp-caps"><span class="hp-ctx"><b>262 k</b><small>contexto</small></span><span class="hp-tag">herramientas</span><span class="hp-tag">visión</span></div>
+                <div class="hp-sep"></div>
+                <div class="hp-effw">
+                  <div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Bajo</b></div>
+                  <div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="2" aria-valuetext="Bajo" style="--v:2">
+                    <div class="hp-eff-rail"><i class="hp-eff-fill"></i></div>
+                    <div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+                    <div class="hp-eff-thumb"></div>
+                  </div>
+                  <div class="hp-eff-ax"><span>apagado</span><span>ultra</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="hp-shell hp-ses">
+              <div class="hp-core">
+                <div class="hp-ses-h"><div><b>Sesiones</b><em>30</em></div><button class="hp-ib" aria-label="Actualizar la lista" title="Actualizar"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+                <div class="hp-ses-cta"><button class="hp-cta">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+                <div class="hp-list" data-pick>
+                  <div class="hp-grp">Ahora</div>
+                  <a class="hp-row" href="#" aria-current="true"><span class="st"><i></i></span><span class="b"><span class="t">Ubicaciones de la estantería L</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>38 msj</span><span>112 herr.</span></span></span><span class="r">2 min</span></a>
+                  <a class="hp-row" href="#"><span class="st"><i></i></span><span class="b"><span class="t">Cuadre de stock Picqer ES y Shopify</span><span class="m"><span class="src"><svg class="i"><use href="#i-globe"/></svg>api</span><span>14 msj</span><span>41 herr.</span></span></span><span class="r">9 min</span></a>
+                  <div class="hp-grp">Hoy</div>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t pv">dame las 5 últimas facturas de OVH sin conciliar</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>4 msj</span></span></span><span class="r">1 h</span></a>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Recargo de combustible de CEX, noviembre</span><span class="m"><span class="src"><svg class="i"><use href="#i-hook"/></svg>webhook</span><span>9 msj</span><span>12 herr.</span></span></span><span class="r">3 h</span></a>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Borrador a Correos Express por ORD19581</span><span class="m"><span class="src"><svg class="i"><use href="#i-msg"/></svg>whatsapp</span><span>22 msj</span><span>18 herr.</span></span></span><span class="r">5 h</span></a>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Renovación del certificado de Skirmshop</span><span class="m"><span class="src"><svg class="i"><use href="#i-term"/></svg>cli</span><span>17 msj</span><span>26 herr.</span></span></span><span class="r">8 h</span></a>
+                  <div class="hp-grp">Ayer</div>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Etiqueta de reemplazo para Elche</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>31 msj</span><span>44 herr.</span></span></span><span class="r">ayer</span></a>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Resumen semanal de Skirmbooks</span><span class="m"><span class="src"><svg class="i"><use href="#i-clock"/></svg>cron</span><span>3 msj</span><span>7 herr.</span></span></span><span class="r">ayer</span></a>
+                  <div class="hp-grp">Esta semana</div>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Márgenes AGM: equipos al 30 % neto</span><span class="m"><span class="src"><svg class="i"><use href="#i-term"/></svg>cli</span><span>46 msj</span><span>130 herr.</span></span></span><span class="r">3 d</span></a>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Disputa de Klarna sin aviso de Shopify</span><span class="m"><span class="src"><svg class="i"><use href="#i-globe"/></svg>api</span><span>12 msj</span><span>9 herr.</span></span></span><span class="r">4 d</span></a>
+                  <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Cambio de domicilio en Intervención de Armas</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>8 msj</span><span>15 herr.</span></span></span><span class="r">6 d</span></a>
+                </div>
+                <a class="hp-all" href="#">Todas las sesiones<svg class="i"><use href="#i-arrow"/></svg></a>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+    <span class="mk" style="left:1070px;top:70px">1</span>
+    <span class="mk" style="left:1070px;top:160px">2</span>
+    <span class="mk" style="left:1296px;top:126px">3</span>
+    <span class="mk" style="left:1070px;top:219px">4</span>
+    <span class="mk" style="left:1070px;top:292px">5</span>
+    <span class="mk" style="left:1070px;top:428px">6</span>
+    <span class="mk" style="left:1070px;top:470px">7</span>
+    <span class="mk" style="left:1070px;top:512px">8</span>
+    <span class="mk" style="left:1070px;top:645px">9</span>
+    <span class="mk" style="left:1070px;top:840px">10</span>
+  </div>
+  <ol class="cv-legend">
+    <li><span class="mk">1</span><span><b>Cabecera.</b> El perfil al que pertenece el chat (solo se lee; se cambia en la barra de la app) y plegar, que deja el riel del frame 3.</span></li>
+    <li><span class="mk">2</span><span><b>Modelo.</b> El nombre es el botón: abre el ModelPickerDialog de siempre. Debajo, el proveedor en mono.</span></li>
+    <li><span class="mk">3</span><span><b>Conexión del panel.</b> En vivo, conectando o sin conexión, con el punto que late solo en vivo. Sustituye al Badge.</span></li>
+    <li><span class="mk">4</span><span><b>Capacidades.</b> De /api/model/info: el contexto efectivo como cifra fina y lo que admite el modelo.</span></li>
+    <li><span class="mk">5</span><span><b>Razonamiento.</b> Deslizador de ocho pasos, de apagado a ultra, con flechas del teclado. Guarda al soltar, como hoy el Select.</span></li>
+    <li><span class="mk">6</span><span><b>Nuevo chat.</b> La única acción primaria del panel, con su icono en círculo.</span></li>
+    <li><span class="mk">7</span><span><b>Grupos por última actividad.</b> Ahora (is_active), Hoy, Ayer, Esta semana y Antes. La cabecera del grupo se queda pegada al hacer scroll.</span></li>
+    <li><span class="mk">8</span><span><b>La sesión abierta.</b> Fondo elevado y barra de acento. El punto que late marca las vivas.</span></li>
+    <li><span class="mk">9</span><span><b>Sin título.</b> Se ve el inicio del primer mensaje (preview) en gris, no «Sesión sin título».</span></li>
+    <li><span class="mk">10</span><span><b>Todas las sesiones.</b> Lleva a /sessions, donde viven borrar, renombrar y exportar.</span></li>
+  </ol>
+</section>
+
+<section class="cv-frame" id="f2">
+  <div class="cv-cap">
+    <span class="n">Frame 2</span><h2>Estados del panel: cambio pendiente, fallos, carga y vacío</h2>
+    <p>Los avisos son una tercera pieza de cristal entre el modelo y las sesiones, con el filete del color del estado; nunca tapan el terminal. El aviso de «aplica en el próximo chat» vive dentro de la ficha del modelo y sustituye a la tarjeta modelNotice y al diálogo ModelReloadConfirm.</p>
+  </div>
+  <div class="cv-board" style="padding:28px 16px 34px">
+    <div class="st-grid">
+
+      <div class="st-col">
+        <div class="cv-sub">Cambio de modelo pendiente</div>
+        <aside class="hp" aria-label="Modelo y herramientas">
+          <div class="hp-top"><div><b>main</b><span>perfil de este chat</span></div><button class="hp-ib" aria-label="Plegar el panel"><svg class="i"><use href="#i-panel-close"/></svg></button></div>
+          <div class="hp-shell">
+            <div class="hp-core hp-model">
+              <div class="hp-r1"><span class="hp-k">Modelo</span><span class="hp-live" role="status"><i></i>en vivo</span></div>
+              <button class="hp-pick" aria-haspopup="dialog"><strong>alibaba-q38-max</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button>
+              <div class="hp-prov">custom</div>
+              <div class="hp-caps"><span class="hp-ctx"><b>128 k</b><small>contexto</small></span><span class="hp-tag">herramientas</span></div>
+              <div class="hp-sep"></div>
+              <div class="hp-effw">
+                <div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Medio</b></div>
+                <div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="3" aria-valuetext="Medio" style="--v:3">
+                  <div class="hp-eff-rail"><i class="hp-eff-fill"></i></div>
+                  <div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></div>
+                  <div class="hp-eff-thumb"></div>
+                </div>
+                <div class="hp-eff-ax"><span>apagado</span><span>ultra</span></div>
+              </div>
+              <div class="hp-pend" role="status">
+                <p><b>Guardado.</b> Este chat sigue con qwen38-flash-next y razonamiento bajo hasta que abras uno nuevo.</p>
+                <div class="hp-acts"><button class="hp-btn pri">Aplicar ahora</button><button class="hp-btn ghost">Más tarde</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="hp-shell hp-ses">
+            <div class="hp-core">
+              <div class="hp-ses-h"><div><b>Sesiones</b><em>30</em></div><button class="hp-ib" aria-label="Actualizar la lista"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+              <div class="hp-ses-cta"><button class="hp-cta">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+              <div class="hp-list" data-pick>
+                <div class="hp-grp">Ahora</div>
+                <a class="hp-row" href="#" aria-current="true"><span class="st"><i></i></span><span class="b"><span class="t">Ubicaciones de la estantería L</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>38 msj</span><span>112 herr.</span></span></span><span class="r">2 min</span></a>
+                <a class="hp-row" href="#"><span class="st"><i></i></span><span class="b"><span class="t">Cuadre de stock Picqer ES y Shopify</span><span class="m"><span class="src"><svg class="i"><use href="#i-globe"/></svg>api</span><span>14 msj</span><span>41 herr.</span></span></span><span class="r">9 min</span></a>
+                <div class="hp-grp">Hoy</div>
+                <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t pv">dame las 5 últimas facturas de OVH sin conciliar</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>4 msj</span></span></span><span class="r">1 h</span></a>
+              </div>
+              <a class="hp-all" href="#">Todas las sesiones<svg class="i"><use href="#i-arrow"/></svg></a>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="st-col">
+        <div class="cv-sub">Sin conexión y la lista no carga</div>
+        <aside class="hp" aria-label="Modelo y herramientas">
+          <div class="hp-top"><div><b>main</b><span>perfil de este chat</span></div><button class="hp-ib" aria-label="Plegar el panel"><svg class="i"><use href="#i-panel-close"/></svg></button></div>
+          <div class="hp-shell">
+            <div class="hp-core hp-model">
+              <div class="hp-r1"><span class="hp-k">Modelo</span><span class="hp-live err" role="status"><i></i>sin conexión</span></div>
+              <button class="hp-pick" aria-haspopup="dialog"><strong>qwen38-flash-next</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button>
+              <div class="hp-prov">custom</div>
+              <div class="hp-caps"><span class="hp-ctx"><b>262 k</b><small>contexto</small></span><span class="hp-tag">herramientas</span><span class="hp-tag">visión</span></div>
+              <div class="hp-sep"></div>
+              <div class="hp-effw">
+                <div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Bajo</b></div>
+                <div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="2" aria-valuetext="Bajo" style="--v:2">
+                  <div class="hp-eff-rail"><i class="hp-eff-fill"></i></div>
+                  <div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+                  <div class="hp-eff-thumb"></div>
+                </div>
+                <div class="hp-eff-ax"><span>apagado</span><span>ultra</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="hp-shell err" role="alert">
+            <div class="hp-core hp-alert">
+              <svg class="i"><use href="#i-alert"/></svg>
+              <div>
+                <p><b>El panel perdió la conexión con el gateway.</b> <span>El terminal sigue funcionando. Se reintentó seis veces.</span></p>
+                <div class="hp-acts"><button class="hp-btn"><svg class="i"><use href="#i-refresh"/></svg>Reconectar panel</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="hp-shell hp-ses">
+            <div class="hp-core">
+              <div class="hp-ses-h"><div><b>Sesiones</b></div><button class="hp-ib" aria-label="Actualizar la lista"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+              <div class="hp-ses-cta"><button class="hp-cta">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+              <div class="hp-empty">
+                <b>No se pudo leer la lista de sesiones.</b>
+                <p>El servidor respondió 502. El chat abierto no se ve afectado.</p>
+                <div class="hp-acts"><button class="hp-btn"><svg class="i"><use href="#i-refresh"/></svg>Reintentar</button></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="st-col">
+        <div class="cv-sub">Falta la clave del modelo; lista cargando</div>
+        <aside class="hp" aria-label="Modelo y herramientas">
+          <div class="hp-top"><div><b>main</b><span>perfil de este chat</span></div><button class="hp-ib" aria-label="Plegar el panel"><svg class="i"><use href="#i-panel-close"/></svg></button></div>
+          <div class="hp-shell">
+            <div class="hp-core hp-model">
+              <div class="hp-r1"><span class="hp-k">Modelo</span><span class="hp-live warn" role="status"><i></i>conectando</span></div>
+              <button class="hp-pick" aria-haspopup="dialog"><strong>or-glm</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button>
+              <div class="hp-prov">openrouter</div>
+              <div class="hp-caps"><span class="hp-ctx"><b>200 k</b><small>contexto</small></span><span class="hp-tag">herramientas</span></div>
+              <div class="hp-sep"></div>
+              <div class="hp-effw">
+                <div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Medio</b></div>
+                <div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="3" aria-valuetext="Medio" style="--v:3">
+                  <div class="hp-eff-rail"><i class="hp-eff-fill"></i></div>
+                  <div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></div>
+                  <div class="hp-eff-thumb"></div>
+                </div>
+                <div class="hp-eff-ax"><span>apagado</span><span>ultra</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="hp-shell warn" role="alert">
+            <div class="hp-core hp-alert warn">
+              <svg class="i"><use href="#i-key"/></svg>
+              <div>
+                <p><b>Este modelo necesita OPENROUTER_API_KEY</b> <span>y no está entre las claves de main.</span></p>
+                <div class="hp-acts"><button class="hp-btn pri">Añadir clave</button><button class="hp-btn">Cambiar modelo</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="hp-shell hp-ses">
+            <div class="hp-core">
+              <div class="hp-ses-h"><div><b>Sesiones</b></div><button class="hp-ib spin" aria-label="Actualizando la lista" aria-busy="true"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+              <div class="hp-ses-cta"><button class="hp-cta">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+              <div class="hp-list" aria-busy="true" aria-label="Cargando sesiones">
+                <div class="sk-row"><span></span><span><span class="sk" style="width:82%"></span><span class="sk" style="width:46%;height:7px"></span></span><span class="sk" style="width:30px;height:7px"></span></div>
+                <div class="sk-row"><span></span><span><span class="sk" style="width:64%"></span><span class="sk" style="width:52%;height:7px"></span></span><span class="sk" style="width:30px;height:7px"></span></div>
+                <div class="sk-row"><span></span><span><span class="sk" style="width:90%"></span><span class="sk" style="width:38%;height:7px"></span></span><span class="sk" style="width:30px;height:7px"></span></div>
+                <div class="sk-row"><span></span><span><span class="sk" style="width:58%"></span><span class="sk" style="width:44%;height:7px"></span></span><span class="sk" style="width:30px;height:7px"></span></div>
+                <div class="sk-row"><span></span><span><span class="sk" style="width:76%"></span><span class="sk" style="width:50%;height:7px"></span></span><span class="sk" style="width:30px;height:7px"></span></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="st-col">
+        <div class="cv-sub">Perfil sin sesiones; modelo sin razonamiento</div>
+        <aside class="hp" aria-label="Modelo y herramientas">
+          <div class="hp-top"><div><b>ubicaciones-admin</b><span>perfil de este chat</span></div><button class="hp-ib" aria-label="Plegar el panel"><svg class="i"><use href="#i-panel-close"/></svg></button></div>
+          <div class="hp-shell">
+            <div class="hp-core hp-model">
+              <div class="hp-r1"><span class="hp-k">Modelo</span><span class="hp-live" role="status"><i></i>en vivo</span></div>
+              <button class="hp-pick" aria-haspopup="dialog"><strong>or-gemma-26b</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button>
+              <div class="hp-prov">openrouter</div>
+              <div class="hp-caps"><span class="hp-ctx"><b>128 k</b><small>contexto</small></span><span class="hp-tag">herramientas</span><span class="hp-tag">visión</span></div>
+              <div class="hp-sep"></div>
+              <p class="hp-none">Este modelo no admite razonamiento: no hay nivel que elegir.</p>
+            </div>
+          </div>
+          <div class="hp-shell hp-ses">
+            <div class="hp-core">
+              <div class="hp-ses-h"><div><b>Sesiones</b><em>0</em></div><button class="hp-ib" aria-label="Actualizar la lista"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+              <div class="hp-ses-cta"><button class="hp-cta">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+              <div class="hp-empty">
+                <b>Aún no hay sesiones en ubicaciones-admin.</b>
+                <p>Las que se abran aquí, por Telegram o por la API aparecerán por orden de última actividad.</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="cv-frame" id="f3">
+  <div class="cv-cap">
+    <span class="n">Frame 3</span><h2>Plegado: el panel se queda en un riel de 56 px</h2>
+    <p>Es el modo Visual de /vivo llevado al chat: el terminal gana el ancho y lo esencial sigue a la vista como HUD. Sustituye al botón flotante «panel» que hoy se pinta encima del terminal. Ni el riel ni el panel animan el ancho del terminal: cambia de golpe y solo el contenido del panel entra con opacidad y desplazamiento.</p>
+  </div>
+  <div class="cv-board" style="height:640px">
+    <div class="ap">
+      <nav class="ap-nav" aria-label="Navegación de la app (contexto)">
+        <div class="ap-brand">HERMES</div>
+        <div class="ap-prof"><span>Perfil</span>main</div>
+        <a class="ap-item on" href="#">Chat</a>
+        <a class="ap-item" href="#">Sesiones</a>
+        <a class="ap-item" href="#">Modelos</a>
+        <a class="ap-item" href="#">Skills</a>
+        <a class="ap-item" href="#">Cron</a>
+        <a class="ap-item" href="#">Canales</a>
+      </nav>
+      <div class="ap-main">
+        <div class="ap-top"><h3>Ubicaciones de la estantería L</h3><span>Chat</span></div>
+        <div class="ap-row">
+          <div class="term" aria-label="Terminal del chat (contexto)">
+            <div class="bar">hermes  main  qwen38-flash-next, razonamiento bajo</div>
+            <div class="u">› ¿Qué hay ahora en la L1-21 y qué falta por ubicar del pedido de JIA DYI?</div>
+            <div class="gap"></div>
+            <div class="tl g">⚙ <b>picker_warehouse_shelf</b>  L1-21                                  0,4 s</div>
+            <div class="gap"></div>
+            <div class="g">En la L1-21 hay tres referencias. Del pedido a JIA DYI faltan por ubicar dos líneas.</div>
+            <div class="g">¿Las dejo en la L1-22, que tiene hueco?</div>
+            <div class="in">› <span class="car"></span></div>
+          </div>
+          <aside class="hp-rail" role="complementary" aria-label="Modelo y herramientas (plegado)">
+            <div class="hp-shell">
+              <div class="hp-core">
+                <button class="hp-ib" aria-label="Desplegar el panel" title="Desplegar el panel"><svg class="i"><use href="#i-panel-open"/></svg></button>
+                <span class="hp-live" role="status" aria-label="Panel en vivo" title="en vivo"><i></i></span>
+                <button class="hp-mono" aria-label="Modelo qwen38-flash-next, razonamiento bajo. Cambiar de modelo">Q38</button>
+                <span class="hp-vm" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="hp-rsep" aria-hidden="true"></span>
+                <button class="hp-rcta" aria-label="Nuevo chat" title="Nuevo chat"><svg class="i"><use href="#i-plus"/></svg></button>
+                <button class="hp-ib" aria-label="Sesiones: desplegar el panel en la lista" title="Sesiones"><svg class="i"><use href="#i-history"/></svg></button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+    <div class="hp-tip" role="tooltip" style="right:94px;top:158px"><b>qwen38-flash-next</b><span>custom, razonamiento bajo</span></div>
+    <span class="mk" style="left:1418px;top:84px">1</span>
+    <span class="mk" style="left:1418px;top:126px">2</span>
+    <span class="mk" style="left:1418px;top:172px">3</span>
+    <span class="mk" style="left:1418px;top:235px">4</span>
+    <span class="mk" style="left:1418px;top:313px">5</span>
+    <span class="mk" style="left:1418px;top:361px">6</span>
+  </div>
+  <ol class="cv-legend">
+    <li><span class="mk">1</span><span><b>Desplegar.</b> Vuelve al panel entero. El estado se recuerda con la clave de hoy, hermes-chat-panel-collapsed.</span></li>
+    <li><span class="mk">2</span><span><b>Conexión.</b> Solo el punto; su etiqueta va en el aria-label y en el title.</span></li>
+    <li><span class="mk">3</span><span><b>Monograma del modelo.</b> Inicial del primer tramo y la primera cifra del id (qwen38 da Q38; sin cifras, dos letras). Al pasar, la ficha; al pulsar, abre el selector.</span></li>
+    <li><span class="mk">4</span><span><b>Razonamiento.</b> Medidor vertical de ocho marcas, solo lectura. Oculto si el modelo no razona.</span></li>
+    <li><span class="mk">5</span><span><b>Nuevo chat</b> sin desplegar el panel.</span></li>
+    <li><span class="mk">6</span><span><b>Sesiones.</b> Despliega el panel con el foco en la sesión abierta de la lista.</span></li>
+  </ol>
+</section>
+
+<section class="cv-frame" id="f4">
+  <div class="cv-cap">
+    <span class="n">Frame 4</span><h2>Tema claro (Nous Blue) y estados de interacción</h2>
+    <p>Mismo panel, otros valores: en claro el texto principal es un azul profundo y el secundario el azul de marca, para que los metadatos de 11 px pasen 4,5:1. A la derecha, cada componente en todos sus estados, que es lo que se construye.</p>
+  </div>
+  <div class="cv-board" data-theme="light">
+    <div class="ix">
+      <aside class="hp" style="height:780px" aria-label="Modelo y herramientas">
+        <div class="hp-top"><div><b>main</b><span>perfil de este chat</span></div><button class="hp-ib" aria-label="Plegar el panel"><svg class="i"><use href="#i-panel-close"/></svg></button></div>
+        <div class="hp-shell">
+          <div class="hp-core hp-model">
+            <div class="hp-r1"><span class="hp-k">Modelo</span><span class="hp-live" role="status"><i></i>en vivo</span></div>
+            <button class="hp-pick" aria-haspopup="dialog"><strong>qwen38-flash-next</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button>
+            <div class="hp-prov">custom</div>
+            <div class="hp-caps"><span class="hp-ctx"><b>262 k</b><small>contexto</small></span><span class="hp-tag">herramientas</span><span class="hp-tag">visión</span></div>
+            <div class="hp-sep"></div>
+            <div class="hp-effw">
+              <div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Bajo</b></div>
+              <div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="2" aria-valuetext="Bajo" style="--v:2">
+                <div class="hp-eff-rail"><i class="hp-eff-fill"></i></div>
+                <div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="hp-eff-thumb"></div>
+              </div>
+              <div class="hp-eff-ax"><span>apagado</span><span>ultra</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="hp-shell hp-ses">
+          <div class="hp-core">
+            <div class="hp-ses-h"><div><b>Sesiones</b><em>30</em></div><button class="hp-ib" aria-label="Actualizar la lista"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+            <div class="hp-ses-cta"><button class="hp-cta">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+            <div class="hp-list" data-pick>
+              <div class="hp-grp">Ahora</div>
+              <a class="hp-row" href="#" aria-current="true"><span class="st"><i></i></span><span class="b"><span class="t">Ubicaciones de la estantería L</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>38 msj</span><span>112 herr.</span></span></span><span class="r">2 min</span></a>
+              <a class="hp-row" href="#"><span class="st"><i></i></span><span class="b"><span class="t">Cuadre de stock Picqer ES y Shopify</span><span class="m"><span class="src"><svg class="i"><use href="#i-globe"/></svg>api</span><span>14 msj</span><span>41 herr.</span></span></span><span class="r">9 min</span></a>
+              <div class="hp-grp">Hoy</div>
+              <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t pv">dame las 5 últimas facturas de OVH sin conciliar</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>4 msj</span></span></span><span class="r">1 h</span></a>
+              <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Recargo de combustible de CEX, noviembre</span><span class="m"><span class="src"><svg class="i"><use href="#i-hook"/></svg>webhook</span><span>9 msj</span><span>12 herr.</span></span></span><span class="r">3 h</span></a>
+              <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Borrador a Correos Express por ORD19581</span><span class="m"><span class="src"><svg class="i"><use href="#i-msg"/></svg>whatsapp</span><span>22 msj</span><span>18 herr.</span></span></span><span class="r">5 h</span></a>
+              <div class="hp-grp">Ayer</div>
+              <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Etiqueta de reemplazo para Elche</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>31 msj</span><span>44 herr.</span></span></span><span class="r">ayer</span></a>
+            </div>
+            <a class="hp-all" href="#">Todas las sesiones<svg class="i"><use href="#i-arrow"/></svg></a>
+          </div>
+        </div>
+      </aside>
+
+      <div class="ix-grid">
+        <div class="ix-set">
+          <h4>Fila de sesión</h4>
+          <div class="ix-cell"><span>reposo</span><div class="ix-panel"><a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Recargo de combustible de CEX</span><span class="m"><span class="src"><svg class="i"><use href="#i-hook"/></svg>webhook</span><span>9 msj</span></span></span><span class="r">3 h</span></a></div></div>
+          <div class="ix-cell"><span>hover</span><div class="ix-panel"><a class="hp-row is-hover" href="#"><span class="st"></span><span class="b"><span class="t">Recargo de combustible de CEX</span><span class="m"><span class="src"><svg class="i"><use href="#i-hook"/></svg>webhook</span><span>9 msj</span></span></span><span class="r">3 h</span></a></div></div>
+          <div class="ix-cell"><span>foco teclado</span><div class="ix-panel"><a class="hp-row is-focus" href="#"><span class="st"></span><span class="b"><span class="t">Recargo de combustible de CEX</span><span class="m"><span class="src"><svg class="i"><use href="#i-hook"/></svg>webhook</span><span>9 msj</span></span></span><span class="r">3 h</span></a></div></div>
+          <div class="ix-cell"><span>abierta y viva</span><div class="ix-panel"><a class="hp-row" href="#" aria-current="true"><span class="st"><i></i></span><span class="b"><span class="t">Ubicaciones de la estantería L</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>38 msj</span></span></span><span class="r">2 min</span></a></div></div>
+          <div class="ix-cell"><span>sin título</span><div class="ix-panel"><a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t pv">dame las 5 últimas facturas de OVH</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>4 msj</span></span></span><span class="r">1 h</span></a></div></div>
+        </div>
+
+        <div class="ix-set">
+          <h4>Nuevo chat</h4>
+          <div class="ix-cell"><span>reposo</span><button class="hp-cta">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+          <div class="ix-cell"><span>hover</span><button class="hp-cta is-hover">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+          <div class="ix-cell"><span>pulsado</span><button class="hp-cta is-press">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+          <div class="ix-cell"><span>foco teclado</span><button class="hp-cta is-focus">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+          <h4 style="margin-top:14px">Botón icono</h4>
+          <div class="ix-cell"><span>reposo, hover, foco, pulsado</span><div style="display:flex;gap:14px"><button class="hp-ib" aria-label="Actualizar"><svg class="i"><use href="#i-refresh"/></svg></button><button class="hp-ib is-hover" aria-label="Actualizar"><svg class="i"><use href="#i-refresh"/></svg></button><button class="hp-ib is-focus" aria-label="Actualizar"><svg class="i"><use href="#i-refresh"/></svg></button><button class="hp-ib is-hover is-press" aria-label="Actualizar"><svg class="i"><use href="#i-refresh"/></svg></button></div></div>
+        </div>
+
+        <div class="ix-set">
+          <h4>Razonamiento</h4>
+          <div class="ix-cell"><span>reposo</span><div class="ix-panel hp-effw" style="padding:10px 14px"><div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Alto</b></div><div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="4" aria-valuetext="Alto" style="--v:4"><div class="hp-eff-rail"><i class="hp-eff-fill"></i></div><div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></div><div class="hp-eff-thumb"></div></div></div></div>
+          <div class="ix-cell"><span>foco teclado</span><div class="ix-panel hp-effw" style="padding:10px 14px"><div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Alto</b></div><div class="hp-eff is-focus" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="4" aria-valuetext="Alto" style="--v:4"><div class="hp-eff-rail"><i class="hp-eff-fill"></i></div><div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></div><div class="hp-eff-thumb"></div></div></div></div>
+          <div class="ix-cell"><span>guardando</span><div class="ix-panel hp-effw" style="padding:10px 14px"><div class="hp-eff-h"><span class="hp-k">Razonamiento</span><span><em>guardando</em><b data-eff-label>Extra alto</b></span></div><div class="hp-eff saving" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="5" aria-valuetext="Extra alto" aria-busy="true" style="--v:5"><div class="hp-eff-rail"><i class="hp-eff-fill"></i></div><div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div><div class="hp-eff-thumb"></div></div></div></div>
+          <div class="ix-cell"><span>no se guardó</span><div class="ix-panel hp-effw" style="padding:10px 14px"><div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Alto</b></div><div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="4" aria-valuetext="Alto" style="--v:4"><div class="hp-eff-rail"><i class="hp-eff-fill"></i></div><div class="hp-eff-ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></div><div class="hp-eff-thumb"></div></div><p class="hp-none" style="color:var(--err-tx);margin-top:2px">No se guardó: sigue en Alto.</p></div></div>
+        </div>
+
+        <div class="ix-set">
+          <h4>Conexión del panel</h4>
+          <div class="ix-cell"><span>open</span><span class="hp-live" style="justify-self:start"><i></i>en vivo</span></div>
+          <div class="ix-cell"><span>connecting</span><span class="hp-live warn" style="justify-self:start"><i></i>conectando</span></div>
+          <div class="ix-cell"><span>closed, error</span><span class="hp-live err" style="justify-self:start"><i></i>sin conexión</span></div>
+          <div class="ix-cell"><span>idle</span><span class="hp-live" style="justify-self:start;opacity:.8"><i style="background:var(--muted);animation:none"></i>en espera</span></div>
+          <h4 style="margin-top:14px">Modelo</h4>
+          <div class="ix-cell"><span>reposo, hover</span><div style="display:flex;gap:10px"><span class="hp-pick" style="margin:0;width:auto"><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></span><span class="hp-pick" style="margin:0;width:auto"><span class="c" style="transform:translateY(1px) scale(1.06);background:color-mix(in srgb,var(--text) 14%,transparent)"><svg class="i"><use href="#i-chev-down"/></svg></span></span></div></div>
+          <div class="ix-cell"><span>nombre largo</span><div class="ix-panel" style="padding:8px 12px"><button class="hp-pick" style="margin:0" aria-haspopup="dialog"><strong style="font-size:18px">alibaba-dsv41-fl-thinking-preview</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cv-frame" id="f5">
+  <div class="cv-cap">
+    <span class="n">Frame 5</span><h2>Móvil, 390 × 844: el disparador de la cabecera y la hoja inferior</h2>
+    <p>Hoy el panel es un cajón de 256 px por la derecha bajo un botón de texto «Modelo y herramientas». En el teléfono pasa a hoja inferior con asa; entre 640 y 1023 px sigue siendo cajón lateral, de 380 px, con la misma estructura del escritorio.</p>
+  </div>
+  <div class="cv-board">
+    <div class="mb-wrap">
+
+      <div>
+        <div class="cv-sub">Cerrado</div>
+        <div class="mb">
+          <div class="mb-head">
+            <span class="ham" aria-hidden="true"><svg class="i"><use href="#i-menu"/></svg></span>
+            <h3>Ubicaciones de la estantería L</h3>
+            <button class="mb-trig" aria-label="Modelo y herramientas" aria-expanded="false" aria-controls="chat-side-panel"><i></i><span>qwen38-flash-next</span><svg class="i"><use href="#i-chev-down"/></svg></button>
+          </div>
+          <div class="mb-body">
+            <div class="term" aria-label="Terminal del chat (contexto)">
+              <div class="u">› ¿Qué hay en la L1-21?</div>
+              <div class="gap"></div>
+              <div class="tl">⚙ <b>picker_warehouse_shelf</b>  L1-21</div>
+              <div class="gap"></div>
+              <div>Tres referencias:</div>
+              <div>  SP-HICAPA-51   6 uds</div>
+              <div>  SP-HICAPA-43   2 uds</div>
+              <div>  SP-VIPER-07   11 uds</div>
+              <div class="gap"></div>
+              <div>Faltan dos líneas del pedido</div>
+              <div>de JIA DYI. ¿Las dejo en la L1-22?</div>
+              <div class="in">› <span class="car"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="cv-sub">Abierto: hoja inferior al 88 %</div>
+        <div class="mb">
+          <div class="mb-head">
+            <span class="ham" aria-hidden="true"><svg class="i"><use href="#i-menu"/></svg></span>
+            <h3>Ubicaciones de la estantería L</h3>
+            <button class="mb-trig" aria-label="Modelo y herramientas" aria-expanded="true" aria-controls="chat-side-panel"><i></i><span>qwen38-flash-next</span><svg class="i"><use href="#i-chev-down"/></svg></button>
+          </div>
+          <div class="mb-body"><div class="term"><div class="u">› ¿Qué hay en la L1-21?</div></div></div>
+          <div class="mb-scrim" aria-hidden="true"></div>
+          <div class="mb-sheet" id="chat-side-panel" role="dialog" aria-modal="true" aria-label="Modelo y herramientas">
+            <div class="in">
+              <span class="mb-grab" aria-hidden="true"></span>
+              <div class="hp-top"><div><b>main</b><span>perfil de este chat</span></div><button class="hp-ib" aria-label="Cerrar modelo y herramientas"><svg class="i"><use href="#i-x"/></svg></button></div>
+              <div class="hp-model" style="position:relative">
+                <div class="hp-r1"><span class="hp-k">Modelo</span><span class="hp-live" role="status"><i></i>en vivo</span></div>
+                <button class="hp-pick" aria-haspopup="dialog"><strong>qwen38-flash-next</strong><span class="c"><svg class="i"><use href="#i-chev-down"/></svg></span></button>
+                <div class="hp-caps" style="margin-top:10px"><span class="hp-ctx"><b>262 k</b><small>contexto</small></span><span class="hp-tag">herramientas</span><span class="hp-tag">visión</span></div>
+                <div class="hp-effw" style="margin-top:14px">
+                  <div class="hp-eff-h"><span class="hp-k">Razonamiento</span><b data-eff-label>Bajo</b></div>
+                  <div class="hp-eff" role="slider" tabindex="0" aria-label="Esfuerzo de razonamiento" aria-valuemin="0" aria-valuemax="7" aria-valuenow="2" aria-valuetext="Bajo" style="--v:2;height:36px">
+                    <div class="hp-eff-rail" style="top:17px"><i class="hp-eff-fill"></i></div>
+                    <div class="hp-eff-ticks" style="top:16px"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+                    <div class="hp-eff-thumb" style="top:11px"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="hp-sep full" style="margin:0 18px"></div>
+              <div class="hp-ses-h" style="padding:12px 10px 8px 18px"><div><b>Sesiones</b><em>30</em></div><button class="hp-ib" aria-label="Actualizar la lista"><svg class="i"><use href="#i-refresh"/></svg></button></div>
+              <div class="hp-ses-cta" style="padding:0 12px 6px"><button class="hp-cta" style="height:46px">Nuevo chat<i><svg class="i"><use href="#i-plus"/></svg></i></button></div>
+              <div class="hp-list" data-pick>
+                <div class="hp-grp">Ahora</div>
+                <a class="hp-row" href="#" aria-current="true"><span class="st"><i></i></span><span class="b"><span class="t">Ubicaciones de la estantería L</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>38 msj</span><span>112 herr.</span></span></span><span class="r">2 min</span></a>
+                <a class="hp-row" href="#"><span class="st"><i></i></span><span class="b"><span class="t">Cuadre de stock Picqer ES y Shopify</span><span class="m"><span class="src"><svg class="i"><use href="#i-globe"/></svg>api</span><span>14 msj</span></span></span><span class="r">9 min</span></a>
+                <div class="hp-grp">Hoy</div>
+                <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t pv">dame las 5 últimas facturas de OVH sin conciliar</span><span class="m"><span class="src"><svg class="i"><use href="#i-send"/></svg>telegram</span><span>4 msj</span></span></span><span class="r">1 h</span></a>
+                <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Recargo de combustible de CEX, noviembre</span><span class="m"><span class="src"><svg class="i"><use href="#i-hook"/></svg>webhook</span><span>9 msj</span></span></span><span class="r">3 h</span></a>
+                <a class="hp-row" href="#"><span class="st"></span><span class="b"><span class="t">Borrador a Correos Express por ORD19581</span><span class="m"><span class="src"><svg class="i"><use href="#i-msg"/></svg>whatsapp</span><span>22 msj</span></span></span><span class="r">5 h</span></a>
+              </div>
+              <a class="hp-all" href="#" style="margin:2px 10px 18px">Todas las sesiones<svg class="i"><use href="#i-arrow"/></svg></a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mb-notes">
+        <h4>Comportamiento por ancho</h4>
+        <ul>
+          <li><b>≥ 1024 px</b><span>Panel en línea del frame 1 (328 px; 304 px entre 1024 y 1279). Plegable al riel del frame 3. El corte es el de hoy: matchMedia max-width 1023.</span></li>
+          <li><b>640 a 1023</b><span>Cajón lateral derecho de 380 px con velo, misma estructura que el escritorio, portal a document.body como hoy (z 55 el velo, z 60 el cajón).</span></li>
+          <li><b>&lt; 640 px</b><span>Hoja inferior al 88 % del alto (dvh) con asa. Se cierra arrastrando hacia abajo más de 96 px, con Esc, tocando el velo o eligiendo una sesión (el onPicked de hoy).</span></li>
+          <li><b>disparador</b><span>En la cabecera de la página, el punto de conexión y el nombre corto del modelo en lugar del texto «Modelo y herramientas», que se queda como aria-label. aria-expanded y aria-controls como hoy.</span></li>
+          <li><b>foco</b><span>Al abrir, foco en el botón de cerrar y atrapado dentro de la hoja; al cerrar vuelve al disparador. El body no hace scroll mientras está abierta (como hoy).</span></li>
+          <li><b>tacto</b><span>Filas de 52 px de alto como mínimo, botones de icono de 40 px y el deslizador de razonamiento con 36 px de zona táctil.</span></li>
+          <li><b>movimiento</b><span>Entra con translateY y el muelle de 700 ms; el velo con opacidad en 400 ms. Con reducción de movimiento, aparece sin transición.</span></li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="cv-frame" id="f6">
+  <div class="cv-cap">
+    <span class="n">Frame 6</span><h2>Tokens y componentes</h2>
+    <p>Los ocho primeros son los del template con los valores del tema; el resto son extras del panel, declarados una vez. En web/src cada uno es una variable CSS calculada desde el ThemeProvider (fórmulas en el handoff), así que Midnight, Ember o un tema propio los heredan sin tocar el panel.</p>
+  </div>
+  <div class="cv-board" style="padding:36px 40px 44px">
+    <div class="tk-h">Color</div>
+    <div class="tk" style="grid-template-columns:repeat(6,minmax(0,1fr))">
+      <div class="tk-sw"><i style="background:var(--bg)"></i><b>--bg</b><span>Fondo de la página y del velo.</span></div>
+      <div class="tk-sw"><i style="background:var(--surface)"></i><b>--surface</b><span>Plano elevado sobre el fondo.</span></div>
+      <div class="tk-sw"><i style="background:var(--surface-2)"></i><b>--surface-2</b><span>Fila abierta, botones icono, monograma.</span></div>
+      <div class="tk-sw"><i style="background:var(--text)"></i><b>--text</b><span>Títulos, nombre del modelo, cifras.</span></div>
+      <div class="tk-sw"><i style="background:var(--muted)"></i><b>--muted</b><span>Metadatos, etiquetas, ejes. Único nivel secundario.</span></div>
+      <div class="tk-sw"><i style="background:var(--border)"></i><b>--border</b><span>Bordes de controles.</span></div>
+      <div class="tk-sw"><i style="background:var(--accent)"></i><b>--accent</b><span>Nuevo chat, foco, barra de la sesión abierta, relleno del deslizador.</span></div>
+      <div class="tk-sw"><i style="background:var(--accent-2)"></i><b>--accent-2</b><span>Final del degradado de los botones primarios.</span></div>
+      <div class="tk-sw"><i style="background:var(--on-accent)"></i><b>--on-accent</b><span>Texto sobre el acento. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--glow)"></i><b>--glow</b><span>Halo del nombre del modelo, del deslizador y de los primarios. Extra (warmGlow).</span></div>
+      <div class="tk-sw"><i style="background:var(--ok)"></i><b>--ok</b><span>En vivo y sesiones vivas. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--warn)"></i><b>--warn</b><span>Conectando, cambio pendiente, clave que falta. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--err)"></i><b>--err</b><span>Sin conexión y fallos; --err-tx para el texto. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--hair-2)"></i><b>--hair, --hair-2</b><span>Filetes y carriles: 8 % y 16 % del texto. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--shell);box-shadow:inset 0 0 0 1px var(--hair-2)"></i><b>--shell</b><span>Concha exterior del doble bisel, con blur 24 px. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--core)"></i><b>--core, --core-solid</b><span>Núcleo interior; la versión opaca para cabeceras pegajosas y la hoja. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--shade)"></i><b>--shade</b><span>Sombra profunda teñida del fondo, nunca negro puro. Extra.</span></div>
+      <div class="tk-sw"><i style="background:var(--term)"></i><b>--term</b><span>Fondo del terminal: terminalBackground del tema, sin cambios.</span></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.1fr 1fr;gap:56px;margin-top:8px">
+      <div>
+        <div class="tk-h" style="margin-top:30px">Tipografía</div>
+        <dl class="tk-type">
+          <dt>21 / 400 / -0,02 em</dt><dd style="font-size:21px;letter-spacing:-.02em;text-shadow:0 0 28px var(--glow)">qwen38-flash-next</dd>
+          <dt>22 / 300 / -0,03 em</dt><dd style="font-size:22px;font-weight:300;letter-spacing:-.03em">262 k <small style="font-size:11.5px;color:var(--muted);letter-spacing:0">contexto</small></dd>
+          <dt>17 / 400</dt><dd style="font-size:17px">Aún no hay sesiones en este perfil.</dd>
+          <dt>14 / 500</dt><dd style="font-size:14px;font-weight:500">Sesiones</dd>
+          <dt>13,5 / 500</dt><dd style="font-size:13.5px;font-weight:500">Nuevo chat</dd>
+          <dt>13 / 400 y 500</dt><dd style="font-size:13px">Ubicaciones de la estantería L</dd>
+          <dt>12,5 / 400</dt><dd style="font-size:12.5px">El terminal sigue funcionando.</dd>
+          <dt>12 / 400 y 500</dt><dd style="font-size:12px;color:var(--muted)">Modelo, Razonamiento, Hoy</dd>
+          <dt>mono 11 a 11,5</dt><dd style="font:11px var(--mono);color:var(--muted)">telegram  38 msj  112 herr.  2 min</dd>
+          <dt>mono 10,5</dt><dd style="font:10.5px var(--mono);color:var(--muted)">apagado  ultra</dd>
+        </dl>
+        <p class="hp-none" style="margin-top:14px;max-width:60ch">Sans = --theme-font-sans y mono = --theme-font-mono del tema activo (y del override de fuente del usuario). Toda cifra en mono o con tabular-nums. Nada de mayúsculas con tracking: las etiquetas van en caja normal.</p>
+      </div>
+      <div>
+        <div class="tk-h" style="margin-top:30px">Radios (desde --theme-radius)</div>
+        <div class="tk-row">
+          <div><div class="tk-rad" style="border-radius:var(--r-shell)"></div><div class="tk-cap">concha  r × 2,5  20</div></div>
+          <div><div class="tk-rad" style="border-radius:var(--r-core)"></div><div class="tk-cap">núcleo  concha − 5  15</div></div>
+          <div><div class="tk-rad" style="border-radius:var(--r-row)"></div><div class="tk-cap">fila  r × 1,25  10</div></div>
+          <div><div class="tk-rad" style="border-radius:999px;height:40px"></div><div class="tk-cap">píldora  r × 999</div></div>
+        </div>
+        <p class="hp-none" style="margin-top:10px">Con un tema de radio 0 (Mono, Cyberpunk) todo sale a escuadra, píldoras incluidas.</p>
+        <div class="tk-h">Espaciado</div>
+        <div class="tk-row" style="align-items:flex-end">
+          <div><div style="width:4px;height:24px;background:var(--accent)"></div><div class="tk-cap">4</div></div>
+          <div><div style="width:6px;height:24px;background:var(--accent)"></div><div class="tk-cap">6</div></div>
+          <div><div style="width:8px;height:24px;background:var(--accent)"></div><div class="tk-cap">8</div></div>
+          <div><div style="width:10px;height:24px;background:var(--accent)"></div><div class="tk-cap">10</div></div>
+          <div><div style="width:12px;height:24px;background:var(--accent)"></div><div class="tk-cap">12</div></div>
+          <div><div style="width:16px;height:24px;background:var(--accent)"></div><div class="tk-cap">16</div></div>
+          <div><div style="width:24px;height:24px;background:var(--accent)"></div><div class="tk-cap">24</div></div>
+        </div>
+        <p class="hp-none" style="margin-top:10px">Concha 5; núcleo 16 en horizontal; entre piezas 10; filas 8 y 10; grupos 10 arriba. Todo multiplicado por --theme-spacing-mul.</p>
+        <div class="tk-h">Movimiento</div>
+        <ul class="tk-comp">
+          <li><b>--spring</b><span>cubic-bezier(.32,.72,0,1): estados, deslizador (500 ms), panel y hoja (700 ms).</span></li>
+          <li><b>--out</b><span>cubic-bezier(.16,1,.3,1): entrada de filas (500 ms, 24 ms de escalón, solo la primera carga) y el pulso de en vivo (2 s).</span></li>
+          <li><b>solo transform y opacity</b><span>Nunca width ni left: el terminal no se anima al plegar.</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tk-h" style="margin-top:34px">Componentes</div>
+    <ul class="tk-comp" style="display:grid;grid-template-columns:1fr 1fr;column-gap:56px">
+      <li><b>ChatSidePanel</b><span>El contenedor id chat-side-panel: cabecera, ModelCard, PanelAlert opcional y SessionsCard. Variantes inline, rail y sheet.</span></li>
+      <li><b>GlassShell</b><span>Concha y núcleo del doble bisel; prop tone: neutral, warn, err.</span></li>
+      <li><b>PanelHeader</b><span>Perfil (solo lectura) y botón plegar o cerrar.</span></li>
+      <li><b>ModelCard</b><span>Hoy ChatSidebar: etiqueta, ConnectionPill, ModelPickButton, proveedor, CapabilityStrip, EffortSlider, PendingApplyBand.</span></li>
+      <li><b>ConnectionPill</b><span>open, connecting, closed, error, idle (STATE_LABEL de hoy en castellano).</span></li>
+      <li><b>EffortSlider</b><span>Hoy ReasoningPicker: role slider, 0 a 7, guarda al soltar, estados guardando y revertido.</span></li>
+      <li><b>PendingApplyBand</b><span>Sustituye modelNotice y ModelReloadConfirm: Aplicar ahora (startFreshDashboardChat) o Más tarde.</span></li>
+      <li><b>PanelAlert</b><span>El banner de hoy (sidecar, events feed, credencial) con sus mismas acciones.</span></li>
+      <li><b>SessionsCard</b><span>Hoy ChatSessionList: cabecera con recuento y actualizar, NewChatButton, lista agrupada, enlace a /sessions.</span></li>
+      <li><b>SessionRow</b><span>Punto vivo, título o preview, fuente con icono, mensajes, herramientas y hora; aria-current en la abierta.</span></li>
+      <li><b>SessionsSkeleton, SessionsEmpty, SessionsError</b><span>Los tres estados de la lista del frame 2.</span></li>
+      <li><b>PanelRail</b><span>El riel plegado del frame 3, con ModelMonogram y EffortMeter.</span></li>
+    </ul>
+  </div>
+</section>
+
+</div>
+</x-dc>
+</body>
+</html>

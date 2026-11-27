@@ -903,4 +903,66 @@ export interface Translations {
       confirmManyTitle?: string;
     };
   };
+
+  // ── Chat side panel (design/hermes-side-panel.dc.html) ──
+  chatPanel: {
+    profileOfChat: string;
+    model: string;
+    context: string;
+    tools: string;
+    vision: string;
+    collapse: string;
+    expand: string;
+    reasoning: string;
+    noReasoning: string;
+    effort: {
+      none: string;
+      minimal: string;
+      low: string;
+      medium: string;
+      high: string;
+      xhigh: string;
+      max: string;
+      ultra: string;
+    };
+    effortAxisOff: string;
+    effortAxisUltra: string;
+    saving: string;
+    notSaved: string;
+    saved: string;
+    pendingModel: string;
+    pendingEffort: string;
+    applyNow: string;
+    later: string;
+    reconnectPanel: string;
+    reloadPage: string;
+    addKey: string;
+    switchModel: string;
+    conn: {
+      live: string;
+      connecting: string;
+      offline: string;
+      idle: string;
+    };
+    groups: {
+      now: string;
+      today: string;
+      yesterday: string;
+      week: string;
+      before: string;
+    };
+    msgs: string;
+    toolCalls: string;
+    allSessions: string;
+    emptyProfile: string;
+    listError: string;
+    time: {
+      now: string;
+      min: string;
+      hours: string;
+      yesterday: string;
+      days: string;
+    };
+    railModelLabel: string;
+  };
 }

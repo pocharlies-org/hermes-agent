@@ -36,4 +36,8 @@ permissions:
 jobs:
   duplicados:
     uses: pocharlies-org/k8s-gitops-pocharlies/.github/workflows/reusable-duplicados.yml@main
+    with:
+      # El canvas de diseño (design/*.dc.html) repite markup por fotograma: es
+      # su formato, no código copiado.
+      ignorar: design/*
     secrets: inherit

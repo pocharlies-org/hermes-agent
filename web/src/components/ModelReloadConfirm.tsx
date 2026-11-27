@@ -10,9 +10,9 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
  * first because the reload starts a fresh chat (the current one stays resumable
  * in Sessions and the agent's memory is kept).
  *
- * Shared by the chat sidebar picker and the Models page so both behave
- * identically. `model` is the short model name awaiting confirmation, or null
- * when the dialog is closed.
+ * Used by the Models page (the chat side panel applies a model change through
+ * its own "Apply now" band instead). `model` is the short model name awaiting
+ * confirmation, or null when the dialog is closed.
  */
 export function ModelReloadConfirm({
   model,

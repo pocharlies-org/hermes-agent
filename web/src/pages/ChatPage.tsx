@@ -23,19 +23,20 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
-import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
-import { Copy, PanelRight, RotateCcw, X } from "lucide-react";
+import { Copy, PanelRight, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router";
 
+import { PanelHeader, PanelRail, useRailModel } from "@/components/ChatSidePanel";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
 import { latchChatActivation } from "@/lib/chat-activation";
+import type { ConnectionState } from "@/lib/gatewayClient";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
 import { createPtyCompositionForwarder } from "@/lib/pty-composition";
@@ -363,6 +364,19 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       ? window.matchMedia("(max-width: 1023px)").matches
       : false,
   );
+  // < 640 px: the panel opens as a bottom sheet (thumb reach); 640-1023 stays
+  // a right drawer. Design: design/hermes-side-panel.dc.html, frame 5.
+  const [sheetMode, setSheetMode] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 639px)").matches
+      : false,
+  );
+  // Last sidecar state reported by ChatSidebar while the panel was open —
+  // the collapsed rail's connection dot (stale by design once collapsed:
+  // the sidecar is gone with the panel; shortcut: upgrade if the rail ever
+  // needs a live dot, give it its own GatewayClient).
+  const [panelConn, setPanelConn] = useState<ConnectionState>("idle");
+  const [railRefresh, setRailRefresh] = useState(0);
 
   const { theme } = useTheme();
   const terminalBg = theme.terminalBackground ?? DEFAULT_TERMINAL_BACKGROUND;
@@ -383,6 +397,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // management profile. Changing it remounts the terminal (key below /
   // effect dep) so the user explicitly starts a fresh scoped session.
   const { profile: scopedProfile } = useProfileScope();
+  const rail = useRailModel(
+    scopedProfile,
+    isActive && !narrow && chatPanelCollapsed,
+    railRefresh,
+  );
   const channel = useMemo(
     () => generateChannelId(`${resumeParam ?? ""}\0${scopedProfile}`),
     [resumeParam, scopedProfile],
@@ -453,6 +472,14 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 1023px)");
     const sync = () => setNarrow(mql.matches);
+    sync();
+    mql.addEventListener("change", sync);
+    return () => mql.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 639px)");
+    const sync = () => setSheetMode(mql.matches);
     sync();
     mql.addEventListener("change", sync);
     return () => mql.removeEventListener("change", sync);
@@ -1809,61 +1836,42 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
 
         <div
           id="chat-side-panel"
-          role="complementary"
+          role={sheetMode ? "dialog" : "complementary"}
+          aria-modal={sheetMode || undefined}
           aria-label={modelToolsLabel}
           className={cn(
-            "font-mondwest fixed top-0 right-0 z-[60] flex h-dvh max-h-dvh w-64 min-w-0 flex-col antialiased",
-            "border-l border-current/20 text-midground",
+            "fixed z-[60] flex min-w-0 flex-col",
             "bg-background-base/95",
             "transition-transform duration-200 ease-out",
-            "[background:var(--component-sidebar-background,var(--background-base))]",
-            "[clip-path:var(--component-sidebar-clip-path)]",
-            "[border-image:var(--component-sidebar-border-image)]",
-            mobilePanelOpen
-              ? "translate-x-0"
-              : "pointer-events-none translate-x-full",
+            "[background:color-mix(in_srgb,var(--background-base)_97%,transparent)]",
+            sheetMode
+              ? cn(
+                  "hp-sheet inset-x-0 bottom-0 h-[88dvh] p-3 pb-0",
+                  mobilePanelOpen ? "translate-y-0" : "pointer-events-none translate-y-full",
+                )
+              : cn(
+                  "top-0 right-0 h-dvh max-h-dvh w-[380px] border-l border-current/20 p-3",
+                  mobilePanelOpen ? "translate-x-0" : "pointer-events-none translate-x-full",
+                ),
           )}
         >
-          <div
-            className={cn(
-              "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-current/20 px-5",
-            )}
-          >
-            <Typography
-              mondwest
-              className="text-display font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-            >
-              {t.app.modelToolsSheetTitle}
-              <br />
-              {t.app.modelToolsSheetSubtitle}
-            </Typography>
-
-            <Button
-              ghost
-              size="icon"
-              onClick={closeMobilePanel}
-              aria-label={t.app.closeModelTools}
-              className="text-text-secondary hover:text-midground"
-            >
-              <X />
-            </Button>
-          </div>
-
-          <div
-            className={cn(
-              "min-h-0 flex-1 overflow-y-auto overflow-x-hidden",
-              "border-t border-current/10",
-            )}
-          >
-            <div className="border-b border-current/10 px-1 py-2">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-              />
-            </div>
+          {sheetMode && <div className="hp-grab" aria-hidden="true" />}
+          <PanelHeader
+            profile={scopedProfile}
+            narrow
+            onToggle={closeMobilePanel}
+          />
+          <div className="hp flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden">
+            <ChatSidebar
+              channel={channel}
+              profile={scopedProfile}
+              onDashboardNewSessionRequest={startFreshDashboardChat}
+              onSessionTitleChange={handleSessionTitleChange}
+              onApplyNow={startFreshDashboardChat}
+              onConnectionState={setPanelConn}
+            />
             <ChatSessionList
+              className="min-h-0"
               activeSessionId={resumeParam}
               profile={scopedProfile}
               onPicked={closeMobilePanel}
@@ -1898,7 +1906,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         <div
           ref={termWrapRef}
           className={cn(
-            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg",
+            // Same radius as the panel's shell: two neighboring boxes with
+            // different radii look broken (handoff decision 9).
+            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--hp-r-shell)]",
             "p-2 sm:p-3",
           )}
           style={{
@@ -2015,71 +2025,53 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             </span>
           </Button>
 
-          {chatPanelCollapsed && (
-            <Button
-              ghost
-              onClick={toggleChatPanel}
-              title="Show side panel (model + sessions)"
-              aria-label="Show chat side panel"
-              className={cn(
-                "absolute z-10",
-                "normal-case tracking-normal font-normal",
-                "rounded border border-current/30",
-                "bg-black/20",
-                "opacity-70 hover:opacity-100 hover:border-current/60",
-                "transition-opacity duration-150",
-                "top-2 right-2 px-2 py-1 text-xs sm:top-3 sm:right-3",
-              )}
-              style={{ color: terminalFg }}
-            >
-              <span className="inline-flex items-center gap-1">
-                <PanelRight className="h-3 w-3 shrink-0" />
-                <span className="hidden min-[400px]:inline tracking-wide">
-                  panel
-                </span>
-              </span>
-            </Button>
-          )}
         </div>
 
+        {/* Collapsed: the 56 px HUD rail (frame 3) — the old floating "panel"
+            button over the terminal is gone. Open: two glass pieces, model
+            above, sessions filling the height. */}
+        {!narrow && chatPanelCollapsed && (
+          <PanelRail
+            profile={scopedProfile}
+            connState={panelConn}
+            model={rail.model}
+            effortIndex={rail.effortIndex}
+            onExpand={toggleChatPanel}
+            onOpenSessions={toggleChatPanel}
+            onNewChat={startFreshDashboardChat}
+            onModelApplied={() => setRailRefresh((n) => n + 1)}
+          />
+        )}
+
         {!narrow && !chatPanelCollapsed && (
-          <div
+          <aside
             id="chat-side-panel"
             role="complementary"
             aria-label={modelToolsLabel}
-            className="flex min-h-0 shrink-0 flex-col gap-3 overflow-hidden lg:h-full lg:w-60"
+            className="flex min-h-0 w-[328px] shrink-0 flex-col overflow-hidden xl:w-[328px] lg:w-[304px]"
           >
-            <div className="flex h-8 shrink-0 items-center justify-end pr-1">
-              <Button
-                ghost
-                size="icon"
-                onClick={toggleChatPanel}
-                aria-label="Collapse chat side panel"
-                title="Collapse side panel"
-                className="text-text-secondary hover:text-midground"
-              >
-                <X />
-              </Button>
-            </div>
-            {/* Model picker — keeps the rail thin. */}
-            <div className="shrink-0">
+            <PanelHeader
+              profile={scopedProfile}
+              narrow={false}
+              onToggle={toggleChatPanel}
+            />
+            <div className="hp min-h-0 flex-1 gap-2.5 overflow-hidden">
               <ChatSidebar
                 channel={channel}
                 profile={scopedProfile}
                 onDashboardNewSessionRequest={startFreshDashboardChat}
                 onSessionTitleChange={handleSessionTitleChange}
+                onApplyNow={startFreshDashboardChat}
+                onConnectionState={setPanelConn}
               />
-            </div>
-
-            {/* Session switcher fills the remaining height below the model box. */}
-            <div className="min-h-0 flex-1 overflow-hidden">
               <ChatSessionList
+                className="min-h-0"
                 activeSessionId={resumeParam}
                 profile={scopedProfile}
                 onNewChat={startFreshDashboardChat}
               />
             </div>
-          </div>
+          </aside>
         )}
       </div>
       <PluginSlot name="chat:bottom" />
