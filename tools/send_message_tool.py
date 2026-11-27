@@ -505,8 +505,13 @@ async def _send_live_adapter_media(adapter, chat_id, message, media_files, *, th
             return {"error": (f"Live adapter does not implement native {media_kind} delivery; "
                               f"media file {index + 1}/{total} was not sent")}
         try:
+            # The fourth voice dispatch site (#97873 threaded the other three): send_voice must
+            # receive is_voice or the telegram adapter skips the ffmpeg transcode and a .wav lands
+            # as a document instead of a voice bubble.
+            _voice_kw = {"is_voice": is_voice} if method_name == "send_voice" else {}
             last_result = await getattr(adapter, method_name)(
-                chat_id, media_path, caption=caption if index == 0 else None, reply_to=thread_id, metadata=metadata)
+                chat_id, media_path, caption=caption if index == 0 else None, reply_to=thread_id,
+                metadata=metadata, **_voice_kw)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
