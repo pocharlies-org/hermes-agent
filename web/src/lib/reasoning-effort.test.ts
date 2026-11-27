@@ -31,7 +31,7 @@ describe("normalizeEffort", () => {
 });
 
 describe("EFFORT_OPTIONS", () => {
-  it("every option value is in VALID_EFFORTS (no orphan labels)", () => {
+  it("every option value is in VALID_EFFORTS", () => {
     for (const opt of EFFORT_OPTIONS) {
       expect(VALID_EFFORTS.has(opt.value)).toBe(true);
     }

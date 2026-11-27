@@ -23,21 +23,20 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
-import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
-import { PanelRight, RotateCcw, X } from "lucide-react";
+import { PanelRight, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router";
 
-import { ChatSidebar } from "@/components/ChatSidebar";
-import { ChatSessionList } from "@/components/ChatSessionList";
+import { PanelRail, useRailModel } from "@/components/ChatSidePanel";
+import { ChatPanelColumn, ChatPanelSheet } from "@/components/ChatPanelLayout";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
 import { readStoredWorkspace, writeStoredWorkspace } from "@/lib/chat-workspaces";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { readChatPanelCollapsed, toggleChatPanelCollapsed } from "@/lib/chat-panel-collapsed";
+import type { ConnectionState } from "@/lib/gatewayClient";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
 import { createPtyCompositionForwarder } from "@/lib/pty-composition";
@@ -313,6 +312,19 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       ? window.matchMedia("(max-width: 1023px)").matches
       : false,
   );
+  // < 640 px: the panel opens as a bottom sheet (thumb reach); 640-1023 stays
+  // a right drawer. Design: design/hermes-side-panel.dc.html, frame 5.
+  const [sheetMode, setSheetMode] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(max-width: 639px)").matches
+      : false,
+  );
+  // Last sidecar state reported by ChatSidebar while the panel was open —
+  // the collapsed rail's connection dot (stale by design once collapsed:
+  // the sidecar is gone with the panel; shortcut: upgrade if the rail ever
+  // needs a live dot, give it its own GatewayClient).
+  const [panelConn, setPanelConn] = useState<ConnectionState>("idle");
+  const [railRefresh, setRailRefresh] = useState(0);
 
   const { theme } = useTheme();
   const terminalBg = theme.terminalBackground ?? DEFAULT_TERMINAL_BACKGROUND;
@@ -353,6 +365,12 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     setWorkspaceProfile(scopedProfile);
     setWorkspaceCwdState(readStoredWorkspace(scopedProfile));
   }
+
+  const rail = useRailModel(
+    scopedProfile,
+    isActive && !narrow && chatPanelCollapsed,
+    railRefresh,
+  );
   const channel = useMemo(
     () => generateChannelId(`${resumeParam ?? ""}\0${scopedProfile}`),
     [resumeParam, scopedProfile],
@@ -423,6 +441,14 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 1023px)");
     const sync = () => setNarrow(mql.matches);
+    sync();
+    mql.addEventListener("change", sync);
+    return () => mql.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 639px)");
+    const sync = () => setSheetMode(mql.matches);
     sync();
     mql.addEventListener("change", sync);
     return () => mql.removeEventListener("change", sync);
@@ -1760,9 +1786,10 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   //   floating copy button — bottom-right corner, transparent with a
   //     subtle border; stays out of the way until hovered.  Sends
   //     `/copy\n` to Ink, which emits OSC 52 → our clipboard handler.
-  //   sidebar — ChatSidebar opens its own JSON-RPC sidecar; renders
-  //     model badge, tool-call list, model picker. Best-effort: if the
-  //     sidecar fails to connect the terminal pane keeps working.
+  //   panel — ChatPanelColumn (model card + session list; its ChatSidebar
+  //     opens its own JSON-RPC sidecar) or, collapsed, the PanelRail.
+  //     Best-effort: if the sidecar fails to connect the terminal pane
+  //     keeps working.
   //
   // Mobile model/tools sheet is portaled to `document.body` so it stacks
   // above the app sidebar (`z-50`) and mobile chrome (`z-40`).  The main
@@ -1778,94 +1805,29 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     ptyState,
     hydrating: resumeHydrating,
   });
-  const mobileModelToolsPortal =
-    isActive &&
-    narrow &&
-    portalRoot &&
-    createPortal(
-      <>
-        {mobilePanelOpen && (
-          <Button
-            ghost
-            aria-label={t.app.closeModelTools}
-            onClick={closeMobilePanel}
-            className={cn(
-              "fixed inset-0 z-[55] p-0 block",
-              "bg-black/60",
-            )}
-          />
-        )}
-
-        <div
-          id="chat-side-panel"
-          role="complementary"
-          aria-label={modelToolsLabel}
-          className={cn(
-            "font-mondwest fixed top-0 right-0 z-[60] flex h-dvh max-h-dvh w-64 min-w-0 flex-col antialiased",
-            "border-l border-current/20 text-midground",
-            "bg-background-base/95",
-            "transition-transform duration-200 ease-out",
-            "[background:var(--component-sidebar-background,var(--background-base))]",
-            "[clip-path:var(--component-sidebar-clip-path)]",
-            "[border-image:var(--component-sidebar-border-image)]",
-            mobilePanelOpen
-              ? "translate-x-0"
-              : "pointer-events-none translate-x-full",
-          )}
-        >
-          <div
-            className={cn(
-              "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-current/20 px-5",
-            )}
-          >
-            <Typography
-              mondwest
-              className="text-display font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground"
-            >
-              {t.app.modelToolsSheetTitle}
-              <br />
-              {t.app.modelToolsSheetSubtitle}
-            </Typography>
-
-            <Button
-              ghost
-              size="icon"
-              onClick={closeMobilePanel}
-              aria-label={t.app.closeModelTools}
-              className="text-text-secondary hover:text-midground"
-            >
-              <X />
-            </Button>
-          </div>
-
-          <div
-            className={cn(
-              "min-h-0 flex-1 overflow-y-auto overflow-x-hidden",
-              "border-t border-current/10",
-            )}
-          >
-            <div className="border-b border-current/10 px-1 py-2">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-              />
-            </div>
-            <ChatSessionList
-              activeSessionId={resumeParam}
-              isActive={isActive}
-              profile={scopedProfile}
-              onPicked={closeMobilePanel}
-              onNewChat={startFreshDashboardChat}
-              workspaceCwd={workspaceCwd}
-              onWorkspaceChange={setWorkspaceCwd}
-            />
-          </div>
-        </div>
-      </>,
-      portalRoot,
-    );
+  const panelBody = {
+    channel,
+    profile: scopedProfile,
+    activeSessionId: resumeParam,
+    isActive,
+    workspaceCwd,
+    onWorkspaceChange: setWorkspaceCwd,
+    onNewChat: startFreshDashboardChat,
+    onSessionTitleChange: handleSessionTitleChange,
+    onConnectionState: setPanelConn,
+  };
+  const mobileModelToolsPortal = (
+    <ChatPanelSheet
+      active={isActive}
+      narrow={narrow}
+      portalRoot={portalRoot}
+      open={mobilePanelOpen}
+      sheetMode={sheetMode}
+      label={modelToolsLabel}
+      onClose={closeMobilePanel}
+      body={panelBody}
+    />
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -1890,7 +1852,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         <div
           ref={termWrapRef}
           className={cn(
-            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg",
+            // Same radius as the panel's shell: two neighboring boxes with
+            // different radii look broken (handoff decision 9).
+            "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--hp-r-shell)]",
             "p-2 sm:p-3",
           )}
           style={{
@@ -1990,75 +1954,26 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             color={terminalFg}
           />
 
-          {chatPanelCollapsed && (
-            <Button
-              ghost
-              onClick={toggleChatPanel}
-              title="Show side panel (model + sessions)"
-              aria-label="Show chat side panel"
-              className={cn(
-                "absolute z-10",
-                "normal-case tracking-normal font-normal",
-                "rounded border border-current/30",
-                "bg-black/20",
-                "opacity-70 hover:opacity-100 hover:border-current/60",
-                "transition-opacity duration-150",
-                "top-2 right-2 px-2 py-1 text-xs sm:top-3 sm:right-3",
-              )}
-              style={{ color: terminalFg }}
-            >
-              <span className="inline-flex items-center gap-1">
-                <PanelRight className="h-3 w-3 shrink-0" />
-                <span className="hidden min-[400px]:inline tracking-wide">
-                  panel
-                </span>
-              </span>
-            </Button>
-          )}
         </div>
 
-        {!narrow && !chatPanelCollapsed && (
-          <div
-            id="chat-side-panel"
-            role="complementary"
-            aria-label={modelToolsLabel}
-            className="flex min-h-0 shrink-0 flex-col gap-3 overflow-hidden lg:h-full lg:w-60"
-          >
-            <div className="flex h-8 shrink-0 items-center justify-end pr-1">
-              <Button
-                ghost
-                size="icon"
-                onClick={toggleChatPanel}
-                aria-label="Collapse chat side panel"
-                title="Collapse side panel"
-                className="text-text-secondary hover:text-midground"
-              >
-                <X />
-              </Button>
-            </div>
-            {/* Model picker — keeps the rail thin. */}
-            <div className="shrink-0">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-              />
-            </div>
-
-            {/* Session switcher fills the remaining height below the model box. */}
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <ChatSessionList
-                activeSessionId={resumeParam}
-                isActive={isActive}
-                profile={scopedProfile}
-                onNewChat={startFreshDashboardChat}
-                workspaceCwd={workspaceCwd}
-                onWorkspaceChange={setWorkspaceCwd}
-              />
-            </div>
-          </div>
-        )}
+        {/* Collapsed: the 56 px HUD rail (frame 3) — the old floating "panel"
+            button over the terminal is gone. Open: two glass pieces, model
+            above, sessions filling the height. */}
+        {!narrow &&
+          (chatPanelCollapsed ? (
+            <PanelRail
+              profile={scopedProfile}
+              connState={panelConn}
+              model={rail.model}
+              effortIndex={rail.effortIndex}
+              onExpand={toggleChatPanel}
+              onOpenSessions={toggleChatPanel}
+              onNewChat={startFreshDashboardChat}
+              onModelApplied={() => setRailRefresh((n) => n + 1)}
+            />
+          ) : (
+            <ChatPanelColumn label={modelToolsLabel} onToggle={toggleChatPanel} body={panelBody} />
+          ))}
       </div>
       <PluginSlot name="chat:bottom" />
     </div>

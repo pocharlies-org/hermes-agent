@@ -45,19 +45,12 @@ vi.mock('@nous-research/ui/ui/components/spinner', () => ({
   Spinner: () => <span>Loading</span>
 }))
 
-vi.mock('@/i18n', () => ({
-  useI18n: () => ({
-    t: {
-      common: { loading: 'Loading', refresh: 'Refresh', retry: 'Retry' },
-      sessions: {
-        newChat: 'New chat',
-        noSessions: 'No sessions',
-        title: 'Sessions',
-        untitledSession: 'Untitled session'
-      }
-    }
-  })
-}))
+// The real catalog: a partial mock goes stale the moment the panel gains a
+// string and the component reads a key the mock never declared.
+vi.mock('@/i18n', async () => {
+  const { en } = await import('@/i18n/en')
+  return { useI18n: () => ({ t: en }) }
+})
 
 vi.mock('@/lib/api', () => ({ api: { getSessions } }))
 

@@ -133,17 +133,12 @@ vi.mock("@/contexts/useProfileScope", () => ({
 vi.mock("@/themes", () => ({
   useTheme: () => ({ theme: { terminalBackground: "#000000" } }),
 }));
-vi.mock("@/i18n", () => ({
-  useI18n: () => ({
-    t: {
-      app: {
-        closeModelTools: "Close model tools",
-        modelToolsSheetSubtitle: "Tools",
-        modelToolsSheetTitle: "Model",
-      },
-    },
-  }),
-}));
+// The real catalog: a partial mock goes stale the moment the panel gains a
+// string and the component reads a key the mock never declared.
+vi.mock("@/i18n", async () => {
+  const { en } = await import("@/i18n/en");
+  return { useI18n: () => ({ t: en }) };
+});
 vi.mock("@/lib/dashboard-auth-reload", () => ({
   maybeReloadForLoopbackWsAuthFailure: vi.fn(() => false),
 }));

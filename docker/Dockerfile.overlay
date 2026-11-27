@@ -1,15 +1,22 @@
 # Overlay image: the files this branch changes, on top of the live image.
-# Stacked overlay DGX-1621 (X-Hermes-User): base = fork-d923a5e-pbce3c482 (the live tag of the
-# chart: upstream v0.22.2 + the 12-file overlay of this branch + DGX-1471 + SC-5381 + DGX-1628).
-# Only the two files this change touches are COPYed here:
-# - DGX-1621: gateway/platforms/api_server.py + gateway/platforms/api_server_runs.py —
-#   X-Hermes-User asserts the end-user of an authenticated client (the dashboard) and binds it
-#   as HERMES_SESSION_USER_ID of the turn, only on a validated Bearer (same change as main
-#   PR #35). The api_server.py of the live image is the branch's: last touched by 3a0d74546a
-#   (INFRA-439, pinned as p3a0d745 and carried by every later overlay), and api_server_runs.py
-#   by 2ff58849f4, an ancestor of the base build f9aa696c4c. sha256 on the live pod left to
-#   the deploy check (devops), same criterion as #32.
-ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-pbce3c482
+# Stacked overlay DGX-1900 (chat side panel redesign): base = fork-d923a5e-p3a96b32 (the live tag
+# of the chart: upstream v0.22.2 + the python overlays of this branch, last one DGX-1621).
+# What changes here is the dashboard, so this overlay carries the BUILT frontend: `web/` of this
+# branch (the panel redesign, main PR #37) rebuilt with the repo's own recipe — node-deps.mjs for
+# the workspace deps, generate_icons.py for the icon set, scripts/build/web.mjs for the bundle —
+# and only the resulting dist lands in the runtime layer. The Node dependencies of the build stage
+# never enter the final image, same as upstream's Dockerfile (frontend deps are not runtime deps).
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p3a96b32
+
+FROM ${BASE} AS dashboard_build
+USER root
+WORKDIR /opt/hermes
+# The branch's frontend source over the base's (the base carries the deploy line's web/ byte for
+# byte, so this only adds the redesign). Deps and build tools are already in the base image.
+COPY web/ web/
+RUN node scripts/build/node-deps.mjs --source /opt/hermes --workspace web \
+ && /opt/hermes/.venv/bin/python -I scripts/generate_icons.py --source /opt/hermes --out /tmp/hermes-icons \
+ && node scripts/build/web.mjs --source /opt/hermes --icons /tmp/hermes-icons --out /opt/products/web
+
 FROM ${BASE}
-COPY --chmod=644 gateway/platforms/api_server.py /opt/hermes/gateway/platforms/api_server.py
-COPY --chmod=644 gateway/platforms/api_server_runs.py /opt/hermes/gateway/platforms/api_server_runs.py
+COPY --from=dashboard_build /opt/products/web /opt/hermes/hermes_cli/web_dist
