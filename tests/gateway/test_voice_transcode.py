@@ -125,5 +125,36 @@ class TestTelegramSendVoiceTranscode(unittest.TestCase):
                     pass
 
 
+class TestLiveAdapterVoiceForwarding(unittest.TestCase):
+    def test_send_message_tool_forwards_is_voice_to_send_voice(self):
+        """The fourth voice dispatch site: _send_live_adapter_media must pass is_voice to
+        send_voice, or the telegram adapter skips the transcode and a .wav ships as a document."""
+        from tools.send_message_tool import _send_live_adapter_media
+
+        captured = {}
+
+        class _Result:
+            success = True
+            message_id = "1"
+
+        class _Adapter:
+            async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None,
+                                 metadata=None, **kw):
+                captured.update(kw)
+                captured["method"] = "send_voice"
+                return _Result()
+
+        fd, wav = tempfile.mkstemp(suffix=".wav")
+        os.write(fd, b"RIFFfake")
+        os.close(fd)
+        try:
+            out = asyncio.run(_send_live_adapter_media(_Adapter(), "123", "", [(wav, True)]))
+            self.assertNotIn("error", out, out)
+            self.assertEqual(captured.get("method"), "send_voice")
+            self.assertTrue(captured.get("is_voice"), "is_voice must reach send_voice for transcode")
+        finally:
+            os.unlink(wav)
+
+
 if __name__ == "__main__":
     unittest.main()
