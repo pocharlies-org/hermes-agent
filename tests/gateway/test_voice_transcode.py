@@ -156,5 +156,47 @@ class TestLiveAdapterVoiceForwarding(unittest.TestCase):
             os.unlink(wav)
 
 
+class TestDirectBotVoiceTranscode(unittest.TestCase):
+    def test_wav_with_intent_transcodes_and_sends_voice(self):
+        """Direct-bot path (no live adapter): .wav + is_voice=True must transcode and go to
+        send_voice, not send_document (DGX-1928, the sender _send_live_adapter_media's twin)."""
+        from tools.send_message_senders import _telegram_send_one_media
+
+        sent = {}
+
+        class _Msg:
+            message_id = 7
+
+        class _Bot:
+            async def send_voice(self, **kw):
+                sent["kind"] = "voice"
+                return _Msg()
+
+            async def send_document(self, **kw):
+                sent["kind"] = "document"
+                return _Msg()
+
+        fd, wav = tempfile.mkstemp(suffix=".wav")
+        os.write(fd, b"RIFFfake")
+        os.close(fd)
+        fd2, ogg = tempfile.mkstemp(suffix=".ogg")
+        os.write(fd2, b"OggSfake")
+        os.close(fd2)
+        try:
+            with patch("gateway.platforms.base.transcode_to_ogg_opus", return_value=ogg), \
+                 patch("plugins.platforms.telegram.adapter._probe_voice_duration_seconds", return_value=1):
+                asyncio.run(_telegram_send_one_media(
+                    _Bot(), "1", wav, True, caption=None, parse_mode=None, has_html=False,
+                    thread_kwargs={}, force_document=False))
+            self.assertEqual(sent.get("kind"), "voice")
+            self.assertFalse(os.path.exists(ogg), "transcoded temp must be cleaned up")
+        finally:
+            for p in (wav, ogg):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
 if __name__ == "__main__":
     unittest.main()
