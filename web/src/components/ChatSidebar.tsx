@@ -78,6 +78,23 @@ const SIDE_CAR_GAVE_UP_MESSAGE =
   "gateway sidecar disconnected — gave up after " +
   `${SIDE_CAR_MAX_RECONNECT_ATTEMPTS} attempts, use Reconnect`;
 
+/** What each sidecar state paints in the model card's live pill. */
+const CONN_PILL: Record<ConnectionState, { cls: string; key: 'live' | 'connecting' | 'idle' | 'offline' }> = {
+  open: { cls: '', key: 'live' },
+  connecting: { cls: 'warn', key: 'connecting' },
+  idle: { cls: 'warn', key: 'idle' },
+  closed: { cls: 'err', key: 'offline' },
+  error: { cls: 'err', key: 'offline' }
+}
+
+/** Model capabilities as `/api/model/info` reports them (absent means unknown). */
+export interface PanelCaps {
+  context: number
+  tools: boolean
+  vision: boolean
+  reasoning: boolean | null
+}
+
 /** The runtime model a `session.info` payload reports, or undefined when it
  *  carries none (title-only updates) — config stays the badge's source then.
  *  `session.info` is surface-specific on the wire, so narrow defensively. */
@@ -170,7 +187,7 @@ export function ChatSidebar({
   // `reasoning` is null when the backend doesn't report it (`capabilities: {}`
   // for litellm routes): unknown means SHOW the slider — the old UI always
   // did, and hiding it on absent data regressed effort control entirely.
-  const [caps, setCaps] = useState<{ context: number; tools: boolean; vision: boolean; reasoning: boolean | null }>({
+  const [caps, setCaps] = useState<PanelCaps>({
     context: 0,
     tools: false,
     vision: false,
@@ -540,143 +557,39 @@ export function ChatSidebar({
   const credential = credentialWarning(info.credential_warning)
   const banner = error ?? credential?.message ?? null
   const showReload = isEventsAuthRejectionMessage(error)
-  const conn =
-    state === 'open'
-      ? { cls: '', label: t.chatPanel.conn.live }
-      : state === 'connecting'
-        ? { cls: 'warn', label: t.chatPanel.conn.connecting }
-        : state === 'idle'
-          ? { cls: 'warn', label: t.chatPanel.conn.idle }
-          : { cls: 'err', label: t.chatPanel.conn.offline }
-  const contextLabel =
-    caps.context >= 1024 ? `${Math.round(caps.context / 1024)} k` : caps.context > 0 ? String(caps.context) : ''
+  const conn = CONN_PILL[state]
 
   return (
     <div className={cn('hp w-full min-w-0', className)}>
       {/* ModelCard — name opens the picker, capabilities and the effort
           slider live under it; a just-saved change shows the PendingApplyBand
           inside the card instead of a dialog. */}
-      <div className="hp-shell">
-        <div className="hp-core hp-model">
-          <div className="hp-r1">
-            <span className="hp-k">{t.chatPanel.model}</span>
-            <span className={cn('hp-live', conn.cls)} role="status">
-              <i />
-              {conn.label}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            className="hp-pick"
-            aria-haspopup="dialog"
-            title={modelName === '—' ? t.chatPanel.model : modelName}
-            onClick={() => setModelOpen(true)}
-          >
-            <strong>{modelLabel}</strong>
-            <span className="c">
-              <ChevronDown />
-            </span>
-          </button>
-          {effectiveProvider && <div className="hp-prov">{effectiveProvider}</div>}
-
-          {(contextLabel || caps.tools || caps.vision) && (
-            <div className="hp-caps">
-              {contextLabel && (
-                <span className="hp-ctx">
-                  <b>{contextLabel}</b>
-                  <small>{t.chatPanel.context}</small>
-                </span>
-              )}
-              {caps.tools && <span className="hp-tag">{t.chatPanel.tools}</span>}
-              {caps.vision && <span className="hp-tag">{t.chatPanel.vision}</span>}
-            </div>
-          )}
-
-          <div className="hp-sep" />
-
-          {caps.reasoning !== false ? (
-            <ReasoningPicker
-              currentModel={modelName}
-              profile={profile}
-              refreshKey={modelRefreshKey}
-              onChanged={() => setPending('effort')}
-            />
-          ) : (
-            <p className="hp-none">{t.chatPanel.noReasoning}</p>
-          )}
-
-          {pending && (
-            <div className="hp-pend" role="status">
-              <p>
-                <b>{t.chatPanel.saved}</b>{' '}
-                {pending === 'model'
-                  ? t.chatPanel.pendingModel.replace('{model}', modelLabel)
-                  : t.chatPanel.pendingEffort}
-              </p>
-              <div className="hp-acts">
-                <button
-                  type="button"
-                  className="hp-btn pri"
-                  onClick={() => {
-                    setPending(null)
-                    onApplyNow?.()
-                  }}
-                >
-                  {t.chatPanel.applyNow}
-                </button>
-                <button type="button" className="hp-btn ghost" onClick={() => setPending(null)}>
-                  {t.chatPanel.later}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      <ModelCard
+        connCls={conn.cls}
+        connLabel={t.chatPanel.conn[conn.key]}
+        modelName={modelName}
+        modelLabel={modelLabel}
+        effectiveProvider={effectiveProvider}
+        caps={caps}
+        profile={profile}
+        modelRefreshKey={modelRefreshKey}
+        pending={pending}
+        onPickModel={() => setModelOpen(true)}
+        onEffortChanged={() => setPending('effort')}
+        onApplyNow={onApplyNow}
+        onDismissPending={() => setPending(null)}
+      />
 
       {banner && (
-        <div className={cn('hp-shell', error ? 'err' : 'warn')} role="alert">
-          <div className={cn('hp-core hp-alert', !error && 'warn')}>
-            {error ? <AlertCircle /> : <KeyRound />}
-            <div className="min-w-0">
-              <p className="wrap-break-word">
-                <b>{banner}</b>
-              </p>
-              {error && (
-                <div className="hp-acts">
-                  {showReload ? (
-                    <button type="button" className="hp-btn" onClick={() => window.location.reload()}>
-                      <RefreshCw />
-                      {t.chatPanel.reloadPage}
-                    </button>
-                  ) : (
-                    <button type="button" className="hp-btn" onClick={reconnect}>
-                      <RefreshCw />
-                      {t.chatPanel.reconnectPanel}
-                    </button>
-                  )}
-                </div>
-              )}
-              {!error && credential && (
-                <div className="hp-acts">
-                  <button
-                    type="button"
-                    className="hp-btn pri"
-                    // Router navigation: a full page load would tear down the
-                    // xterm scrollback and the chat sockets.
-                    onClick={() => navigate('/env')}
-                  >
-                    <KeyRound />
-                    {t.chatPanel.addKey}
-                  </button>
-                  <button type="button" className="hp-btn" onClick={() => setModelOpen(true)}>
-                    {t.chatPanel.switchModel}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <PanelAlert
+          error={error}
+          banner={banner}
+          showReload={showReload}
+          hasCredential={!!credential}
+          onReconnect={reconnect}
+          onAddKey={() => navigate('/env')}
+          onSwitchModel={() => setModelOpen(true)}
+        />
       )}
 
       {modelOpen && (
@@ -713,6 +626,196 @@ export function ChatSidebar({
           }}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * ModelCard — the panel's first glass piece: the model that answers, its
+ * capabilities and the reasoning-effort slider under it. A just-saved model or
+ * effort shows the PendingApplyBand inside the card (the running chat keeps its
+ * model until a fresh one starts, which `onApplyNow` starts).
+ */
+function ModelCard({
+  connCls,
+  connLabel,
+  modelName,
+  modelLabel,
+  effectiveProvider,
+  caps,
+  profile,
+  modelRefreshKey,
+  pending,
+  onPickModel,
+  onEffortChanged,
+  onApplyNow,
+  onDismissPending
+}: {
+  connCls: string
+  connLabel: string
+  modelName: string
+  modelLabel: string
+  effectiveProvider: string
+  caps: PanelCaps
+  profile?: string
+  modelRefreshKey: number
+  pending: 'model' | 'effort' | null
+  onPickModel: () => void
+  onEffortChanged: () => void
+  onApplyNow?: () => void
+  onDismissPending: () => void
+}) {
+  const { t } = useI18n()
+  const contextLabel =
+    caps.context >= 1024 ? `${Math.round(caps.context / 1024)} k` : caps.context > 0 ? String(caps.context) : ''
+
+  return (
+    <div className="hp-shell">
+      <div className="hp-core hp-model">
+        <div className="hp-r1">
+          <span className="hp-k">{t.chatPanel.model}</span>
+          <span className={cn('hp-live', connCls)} role="status">
+            <i />
+            {connLabel}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          className="hp-pick"
+          aria-haspopup="dialog"
+          title={modelName === '—' ? t.chatPanel.model : modelName}
+          onClick={onPickModel}
+        >
+          <strong>{modelLabel}</strong>
+          <span className="c">
+            <ChevronDown />
+          </span>
+        </button>
+        {effectiveProvider && <div className="hp-prov">{effectiveProvider}</div>}
+
+        {(contextLabel || caps.tools || caps.vision) && (
+          <div className="hp-caps">
+            {contextLabel && (
+              <span className="hp-ctx">
+                <b>{contextLabel}</b>
+                <small>{t.chatPanel.context}</small>
+              </span>
+            )}
+            {caps.tools && <span className="hp-tag">{t.chatPanel.tools}</span>}
+            {caps.vision && <span className="hp-tag">{t.chatPanel.vision}</span>}
+          </div>
+        )}
+
+        <div className="hp-sep" />
+
+        {caps.reasoning !== false ? (
+          <ReasoningPicker
+            currentModel={modelName}
+            profile={profile}
+            refreshKey={modelRefreshKey}
+            onChanged={onEffortChanged}
+          />
+        ) : (
+          <p className="hp-none">{t.chatPanel.noReasoning}</p>
+        )}
+
+        {pending && (
+          <div className="hp-pend" role="status">
+            <p>
+              <b>{t.chatPanel.saved}</b>{' '}
+              {pending === 'model'
+                ? t.chatPanel.pendingModel.replace('{model}', modelLabel)
+                : t.chatPanel.pendingEffort}
+            </p>
+            <div className="hp-acts">
+              <button
+                type="button"
+                className="hp-btn pri"
+                onClick={() => {
+                  onDismissPending()
+                  onApplyNow?.()
+                }}
+              >
+                {t.chatPanel.applyNow}
+              </button>
+              <button type="button" className="hp-btn ghost" onClick={onDismissPending}>
+                {t.chatPanel.later}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * PanelAlert — the panel-level notice: a sidecar/feed failure (with Reconnect,
+ * or Reload when the login ticket died) or a missing provider key (with the way
+ * to fix it). The chat itself keeps working either way.
+ */
+function PanelAlert({
+  error,
+  banner,
+  showReload,
+  hasCredential,
+  onReconnect,
+  onAddKey,
+  onSwitchModel
+}: {
+  error: string | null
+  banner: string
+  showReload: boolean
+  hasCredential: boolean
+  onReconnect: () => void
+  onAddKey: () => void
+  onSwitchModel: () => void
+}) {
+  const { t } = useI18n()
+
+  return (
+    <div className={cn('hp-shell', error ? 'err' : 'warn')} role="alert">
+      <div className={cn('hp-core hp-alert', !error && 'warn')}>
+        {error ? <AlertCircle /> : <KeyRound />}
+        <div className="min-w-0">
+          <p className="wrap-break-word">
+            <b>{banner}</b>
+          </p>
+          {error && (
+            <div className="hp-acts">
+              {showReload ? (
+                <button type="button" className="hp-btn" onClick={() => window.location.reload()}>
+                  <RefreshCw />
+                  {t.chatPanel.reloadPage}
+                </button>
+              ) : (
+                <button type="button" className="hp-btn" onClick={onReconnect}>
+                  <RefreshCw />
+                  {t.chatPanel.reconnectPanel}
+                </button>
+              )}
+            </div>
+          )}
+          {!error && hasCredential && (
+            <div className="hp-acts">
+              <button
+                type="button"
+                className="hp-btn pri"
+                // Router navigation: a full page load would tear down the
+                // xterm scrollback and the chat sockets.
+                onClick={onAddKey}
+              >
+                <KeyRound />
+                {t.chatPanel.addKey}
+              </button>
+              <button type="button" className="hp-btn" onClick={onSwitchModel}>
+                {t.chatPanel.switchModel}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

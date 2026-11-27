@@ -26,12 +26,10 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { cn } from "@/lib/utils";
 import { PanelRight, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router";
 
-import { PanelHeader, PanelRail, useRailModel } from "@/components/ChatSidePanel";
-import { ChatSidebar } from "@/components/ChatSidebar";
-import { ChatSessionList } from "@/components/ChatSessionList";
+import { PanelRail, useRailModel } from "@/components/ChatSidePanel";
+import { ChatPanelColumn, ChatPanelSheet } from "@/components/ChatPanelLayout";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
@@ -1806,75 +1804,29 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     ptyState,
     hydrating: resumeHydrating,
   });
-  const mobileModelToolsPortal =
-    isActive &&
-    narrow &&
-    portalRoot &&
-    createPortal(
-      <>
-        {mobilePanelOpen && (
-          <Button
-            ghost
-            aria-label={t.app.closeModelTools}
-            onClick={closeMobilePanel}
-            className={cn(
-              "fixed inset-0 z-[55] p-0 block",
-              "bg-black/60",
-            )}
-          />
-        )}
-
-        <div
-          id="chat-side-panel"
-          role={sheetMode ? "dialog" : "complementary"}
-          aria-modal={sheetMode || undefined}
-          aria-label={modelToolsLabel}
-          className={cn(
-            "fixed z-[60] flex min-w-0 flex-col",
-            "bg-background-base/95",
-            "transition-transform duration-200 ease-out",
-            "[background:color-mix(in_srgb,var(--background-base)_97%,transparent)]",
-            sheetMode
-              ? cn(
-                  "hp-sheet inset-x-0 bottom-0 h-[88dvh] p-3 pb-0",
-                  mobilePanelOpen ? "translate-y-0" : "pointer-events-none translate-y-full",
-                )
-              : cn(
-                  "top-0 right-0 h-dvh max-h-dvh w-[380px] border-l border-current/20 p-3",
-                  mobilePanelOpen ? "translate-x-0" : "pointer-events-none translate-x-full",
-                ),
-          )}
-        >
-          {sheetMode && <div className="hp-grab" aria-hidden="true" />}
-          <PanelHeader
-            profile={scopedProfile}
-            narrow
-            onToggle={closeMobilePanel}
-          />
-          <div className="hp flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden">
-            <ChatSidebar
-              channel={channel}
-              profile={scopedProfile}
-              onDashboardNewSessionRequest={startFreshDashboardChat}
-              onSessionTitleChange={handleSessionTitleChange}
-              onApplyNow={startFreshDashboardChat}
-              onConnectionState={setPanelConn}
-            />
-            <ChatSessionList
-              className="min-h-0"
-              activeSessionId={resumeParam}
-              isActive={isActive}
-              profile={scopedProfile}
-              onPicked={closeMobilePanel}
-              onNewChat={startFreshDashboardChat}
-              workspaceCwd={workspaceCwd}
-              onWorkspaceChange={setWorkspaceCwd}
-            />
-          </div>
-        </div>
-      </>,
-      portalRoot,
-    );
+  const panelBody = {
+    channel,
+    profile: scopedProfile,
+    activeSessionId: resumeParam,
+    isActive,
+    workspaceCwd,
+    onWorkspaceChange: setWorkspaceCwd,
+    onNewChat: startFreshDashboardChat,
+    onSessionTitleChange: handleSessionTitleChange,
+    onConnectionState: setPanelConn,
+  };
+  const mobileModelToolsPortal = (
+    <ChatPanelSheet
+      active={isActive}
+      narrow={narrow}
+      portalRoot={portalRoot}
+      open={mobilePanelOpen}
+      sheetMode={sheetMode}
+      label={modelToolsLabel}
+      onClose={closeMobilePanel}
+      body={panelBody}
+    />
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -2006,52 +1958,21 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         {/* Collapsed: the 56 px HUD rail (frame 3) — the old floating "panel"
             button over the terminal is gone. Open: two glass pieces, model
             above, sessions filling the height. */}
-        {!narrow && chatPanelCollapsed && (
-          <PanelRail
-            profile={scopedProfile}
-            connState={panelConn}
-            model={rail.model}
-            effortIndex={rail.effortIndex}
-            onExpand={toggleChatPanel}
-            onOpenSessions={toggleChatPanel}
-            onNewChat={startFreshDashboardChat}
-            onModelApplied={() => setRailRefresh((n) => n + 1)}
-          />
-        )}
-
-        {!narrow && !chatPanelCollapsed && (
-          <aside
-            id="chat-side-panel"
-            role="complementary"
-            aria-label={modelToolsLabel}
-            className="flex min-h-0 w-[328px] shrink-0 flex-col overflow-hidden xl:w-[328px] lg:w-[304px]"
-          >
-            <PanelHeader
+        {!narrow &&
+          (chatPanelCollapsed ? (
+            <PanelRail
               profile={scopedProfile}
-              narrow={false}
-              onToggle={toggleChatPanel}
+              connState={panelConn}
+              model={rail.model}
+              effortIndex={rail.effortIndex}
+              onExpand={toggleChatPanel}
+              onOpenSessions={toggleChatPanel}
+              onNewChat={startFreshDashboardChat}
+              onModelApplied={() => setRailRefresh((n) => n + 1)}
             />
-            <div className="hp min-h-0 flex-1 gap-2.5 overflow-hidden">
-              <ChatSidebar
-                channel={channel}
-                profile={scopedProfile}
-                onDashboardNewSessionRequest={startFreshDashboardChat}
-                onSessionTitleChange={handleSessionTitleChange}
-                onApplyNow={startFreshDashboardChat}
-                onConnectionState={setPanelConn}
-              />
-              <ChatSessionList
-                className="min-h-0"
-                activeSessionId={resumeParam}
-                isActive={isActive}
-                profile={scopedProfile}
-                onNewChat={startFreshDashboardChat}
-                workspaceCwd={workspaceCwd}
-                onWorkspaceChange={setWorkspaceCwd}
-              />
-            </div>
-          </aside>
-        )}
+          ) : (
+            <ChatPanelColumn label={modelToolsLabel} onToggle={toggleChatPanel} body={panelBody} />
+          ))}
       </div>
       <PluginSlot name="chat:bottom" />
     </div>
