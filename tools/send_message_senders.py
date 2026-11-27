@@ -193,6 +193,14 @@ async def _telegram_send_one_media(bot, chat_id, media_path, is_voice, *, captio
     """Upload one file with adapter-matching fallbacks (thread-not-found -> no
     ``message_thread_id``; caption parse failure -> plain caption); retries re-seek the file."""
     ext = os.path.splitext(media_path)[1].lower()
+    _transcoded_path = None
+    if is_voice and ext in _AUDIO_EXTS and ext not in _VOICE_EXTS:
+        # Voice intent on a non-Opus format: transcode first (like the adapter's send_voice) or
+        # _telegram_send_media's extension routing ships the .wav as a document, not a voice bubble.
+        from gateway.platforms.base import transcode_to_ogg_opus
+        _transcoded_path = await asyncio.to_thread(transcode_to_ogg_opus, media_path)
+        if _transcoded_path:
+            media_path, ext = _transcoded_path, ".ogg"
     voice_note = ext in _VOICE_EXTS and is_voice
     # ``caption`` is only set for a single captionable file, so this never double-captions
     # a multi-file send or a voice note.
@@ -241,6 +249,9 @@ async def _telegram_send_one_media(bot, chat_id, media_path, is_voice, *, captio
         if thumb_path:
             with contextlib.suppress(OSError):
                 os.remove(thumb_path)
+        if _transcoded_path:
+            with contextlib.suppress(OSError):
+                os.unlink(_transcoded_path)
 
 
 def _telegram_format(message):
