@@ -7,7 +7,7 @@
 
 /** The side panel could not connect; the chat itself is unaffected. */
 export const SIDECAR_DISCONNECTED_MESSAGE =
-  'The chat side panel (model and tool activity) could not connect. Chat still works. Click Reconnect side panel to try again.'
+  'The chat side panel (model and tool activity) could not connect. Chat still works. Click Reconnect panel to try again.'
 
 /** Transport-level texts the shared JSON-RPC client can throw. All mean "sidecar down". */
 const SIDECAR_TRANSPORT_ERRORS = [

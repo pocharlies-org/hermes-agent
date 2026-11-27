@@ -486,7 +486,7 @@ describe('ChatSidebar event socket reconnect', () => {
     await vi.waitFor(() => expect(container.textContent).toContain('Chat still works'))
     expect(container.textContent).not.toContain('WebSocket')
     const labels = Array.from(container.querySelectorAll('button')).map(b => b.textContent?.trim())
-    expect(labels).toContain('Reconnect side panel')
+    expect(labels).toContain('Reconnect panel')
   })
 
   it('still reconnects while a foreign banner suppresses its message', async () => {
@@ -519,7 +519,7 @@ describe('ChatSidebar event socket reconnect', () => {
       FakeWebSocket.instances[0].emit('close', { code: 1006 })
     })
     const reconnectButton = Array.from(container.querySelectorAll('button')).find(b =>
-      /reconnect side panel/i.test(b.textContent ?? '')
+      /reconnect panel/i.test(b.textContent ?? '')
     )
     expect(reconnectButton).toBeDefined()
     await act(async () => {

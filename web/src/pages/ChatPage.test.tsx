@@ -85,6 +85,11 @@ class FakeTerminal {
 const maybeReloadForLoopbackWsAuthFailure = vi.fn(() => false);
 const apiMocks = vi.hoisted(() => ({
   buildWsUrl: vi.fn(async () => "ws://localhost/api/pty?channel=chat-1"),
+  // The collapsed rail (ChatSidePanel) reads model + effort over REST.
+  getModelInfo: vi.fn(async () => ({ model: "qwen38-flash-next" })),
+  getConfig: vi.fn(async () => ({ agent: { reasoning_effort: "low" } })),
+  setModelAssignment: vi.fn(async () => ({ confirm_required: false })),
+  getModelOptions: vi.fn(async () => []),
 }));
 const uploadChatImage = vi.hoisted(() =>
   vi.fn(async () => ({ path: "/tmp/pasted.png" })),
@@ -126,6 +131,24 @@ vi.mock("@/i18n", () => ({
         closeModelTools: "Close model tools",
         modelToolsSheetSubtitle: "Tools",
         modelToolsSheetTitle: "Model",
+      },
+      sessions: { newChat: "New chat", title: "Sessions" },
+      chatPanel: {
+        profileOfChat: "profile of this chat",
+        collapse: "Collapse panel",
+        expand: "Expand panel",
+        conn: { live: "live", connecting: "connecting", offline: "offline", idle: "idle" },
+        effort: {
+          none: "Off",
+          minimal: "Minimal",
+          low: "Low",
+          medium: "Medium",
+          high: "High",
+          xhigh: "Extra high",
+          max: "Max",
+          ultra: "Ultra",
+        },
+        railModelLabel: "Model {model}, reasoning {effort}. Change model",
       },
     },
   }),
@@ -550,7 +573,7 @@ describe("ChatPage side panel collapse", () => {
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
 
     const collapseButton = container.querySelector(
-      '[aria-label="Collapse chat side panel"]',
+      '[aria-label="Collapse panel"]',
     );
     expect(collapseButton).not.toBeNull();
 
@@ -562,22 +585,22 @@ describe("ChatPage side panel collapse", () => {
 
     expect(localStorage.getItem("hermes-chat-panel-collapsed")).toBe("1");
     expect(
-      container.querySelector('[aria-label="Collapse chat side panel"]'),
+      container.querySelector('[aria-label="Collapse panel"]'),
     ).toBeNull();
     expect(
-      container.querySelector('[aria-label="Show chat side panel"]'),
+      container.querySelector('[aria-label="Expand panel"]'),
     ).not.toBeNull();
 
     // Reopening restores the panel and clears the persisted flag.
     await act(async () => {
       container
-        .querySelector('[aria-label="Show chat side panel"]')!
+        .querySelector('[aria-label="Expand panel"]')!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     expect(localStorage.getItem("hermes-chat-panel-collapsed")).toBe("0");
     expect(
-      container.querySelector('[aria-label="Collapse chat side panel"]'),
+      container.querySelector('[aria-label="Collapse panel"]'),
     ).not.toBeNull();
   });
 });

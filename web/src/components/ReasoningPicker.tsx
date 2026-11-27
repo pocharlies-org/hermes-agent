@@ -1,34 +1,29 @@
 /**
  * ReasoningPicker — sets the main model's reasoning effort from the dashboard
- * Chat sidebar, mirroring the desktop app's composer effort radio.
+ * Chat side panel as an eight-step slider (off → ultra), mirroring the design
+ * in `design/hermes-side-panel.dc.html` (frame 1, marker 5).
  *
- * The dashboard previously only showed a read-only "Reasoning" capability
- * badge (see ModelInfoCard) with no way to actually choose the effort level —
- * unlike the desktop app, which exposes a radio in its model menu. This closes
- * that parity gap.
+ * Storage is unchanged: the effort persists to config.yaml at
+ * `agent.reasoning_effort` (the same key the TUI's `/reasoning <level>`
+ * command writes) via the sparse `saveConfig` patch. Click, drag, arrows,
+ * Home/End; the save fires on release (pointerup / key). The running chat
+ * adopts the change on the next fresh session — the parent surfaces that as
+ * the PendingApplyBand, not a modal.
  *
- * Storage: the effort persists to config.yaml at `agent.reasoning_effort`
- * (the same key the TUI's `/reasoning <level>` command and the desktop radio
- * write). We read the whole config and write it back — the established
- * single-key pattern on the dashboard (see ConfigPage) — so the value lands in
- * the config the agent boots a fresh chat from. As with the model picker, the
- * running chat session adopts the change on the next `/new` or page reload;
- * we surface that hint rather than forcing a reload here.
- *
- * Profile scoping: the sidebar passes the chat profile explicitly, so this
+ * Profile scoping: the panel passes the chat profile explicitly, so this
  * reads/writes the same config the chat PTY was launched from.
  */
 
-import { Select, SelectOption } from "@nous-research/ui/ui/components/select";
-import { Brain } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
 import {
   EFFORT_OPTIONS,
   normalizeEffort,
   VALID_EFFORTS,
 } from "@/lib/reasoning-effort";
+import { cn } from "@/lib/utils";
 
 interface ReasoningPickerProps {
   /** Current model string from config — re-reads the saved effort when it
@@ -38,21 +33,32 @@ interface ReasoningPickerProps {
   profile?: string;
   /** Bumped after the model picker saves, to re-read config in lockstep. */
   refreshKey?: number;
-  /** Called after a successful change so the sidebar can show an "apply on
-   *  /new or reload" notice, matching the model-switch UX. */
+  /** Called after a successful change so the panel can show the
+   *  "applies on the next chat" band, matching the model-switch UX. */
   onChanged?: (effort: string) => void;
+  /** Render the axis labels in the panel header row instead (unused here). */
+  disabled?: boolean;
 }
+
+const MAX = EFFORT_OPTIONS.length - 1; // 7 — eight steps, off → ultra
 
 export function ReasoningPicker({
   currentModel,
   profile,
   refreshKey = 0,
   onChanged,
+  disabled = false,
 }: ReasoningPickerProps) {
+  const { t } = useI18n();
   const [effort, setEffort] = useState("medium");
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
   const lastFetchKeyRef = useRef("");
+  const dragRef = useRef(false);
+  // Drag sets `effort` for the visuals; the value to persist on release lives
+  // in a ref so the pointerup handler (same render as the pointerdown) sees it.
+  const pendingRef = useRef<string | null>(null);
 
   useEffect(() => {
     const fetchKey = `${profile ?? ""}:${currentModel}:${refreshKey}`;
@@ -71,16 +77,15 @@ export function ReasoningPicker({
       });
   }, [currentModel, profile, refreshKey]);
 
-  const onSelect = useCallback(
+  const commit = useCallback(
     (next: string) => {
       if (!VALID_EFFORTS.has(next) || next === effort) return;
       const prev = effort;
       setEffort(next); // optimistic
+      setFailed(false);
       setSaving(true);
       // Sparse patch: PUT /api/config deep-merges onto disk, so sending only
-      // the edited key never clobbers sibling keys — and never echoes a
-      // default-expanded snapshot back over values another surface changed
-      // meanwhile (a CLI-pinned auxiliary slot would come back as "auto").
+      // the edited key never clobbers sibling keys.
       void api
         .saveConfig({ agent: { reasoning_effort: next } }, profile)
         .then(() => {
@@ -88,30 +93,101 @@ export function ReasoningPicker({
         })
         .catch(() => {
           setEffort(prev); // revert on failure
+          setFailed(true);
         })
         .finally(() => setSaving(false));
     },
     [effort, onChanged, profile],
   );
 
+  const index = Math.max(
+    0,
+    EFFORT_OPTIONS.findIndex((o) => o.value === effort),
+  );
+  const label = t.chatPanel.effort[
+    (EFFORT_OPTIONS[index]?.value ?? "medium") as keyof typeof t.chatPanel.effort
+  ];
+
+  const valueFromEvent = (clientX: number, el: HTMLElement): number => {
+    const r = el.getBoundingClientRect();
+    const ratio = (clientX - r.left - 7) / Math.max(1, r.width - 14);
+    return Math.min(MAX, Math.max(0, Math.round(ratio * MAX)));
+  };
+
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-xs">
-      <div className="flex items-center gap-1.5 text-text-tertiary">
-        <Brain className="h-3.5 w-3.5" />
-        <span className="text-display tracking-wider">reasoning</span>
+    <div className="hp-effw">
+      <div className="hp-eff-h">
+        <span className="hp-k">{t.chatPanel.reasoning}</span>
+        <b>{saving ? `${label} · ${t.chatPanel.saving}` : label}</b>
       </div>
-      <Select
-        className="ml-auto min-w-0"
-        disabled={!loaded || saving}
-        onValueChange={onSelect}
-        value={effort}
+      <div
+        className={cn("hp-eff", saving && "saving")}
+        role="slider"
+        tabIndex={disabled || !loaded ? -1 : 0}
+        aria-label={t.chatPanel.reasoning}
+        aria-disabled={disabled || !loaded}
+        aria-valuemin={0}
+        aria-valuemax={MAX}
+        aria-valuenow={index}
+        aria-valuetext={label}
+        style={{ "--v": index } as React.CSSProperties}
+        onPointerDown={(e) => {
+          if (disabled || !loaded) return;
+          dragRef.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const next = EFFORT_OPTIONS[valueFromEvent(e.clientX, e.currentTarget)];
+          if (next) {
+            setEffort(next.value);
+            pendingRef.current = next.value;
+          }
+        }}
+        onPointerMove={(e) => {
+          if (!dragRef.current) return;
+          const next = EFFORT_OPTIONS[valueFromEvent(e.clientX, e.currentTarget)];
+          if (next) {
+            setEffort(next.value);
+            pendingRef.current = next.value;
+          }
+        }}
+        onPointerUp={() => {
+          if (!dragRef.current) return;
+          dragRef.current = false;
+          const pending = pendingRef.current;
+          pendingRef.current = null;
+          if (pending) commit(pending);
+        }}
+        onKeyDown={(e) => {
+          if (disabled || !loaded) return;
+          if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+            e.preventDefault();
+            commit(EFFORT_OPTIONS[Math.min(MAX, index + 1)].value);
+          } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+            e.preventDefault();
+            commit(EFFORT_OPTIONS[Math.max(0, index - 1)].value);
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            commit(EFFORT_OPTIONS[0].value);
+          } else if (e.key === "End") {
+            e.preventDefault();
+            commit(EFFORT_OPTIONS[MAX].value);
+          }
+        }}
       >
-        {EFFORT_OPTIONS.map((opt) => (
-          <SelectOption key={opt.value} value={opt.value}>
-            {opt.label}
-          </SelectOption>
-        ))}
-      </Select>
+        <div className="hp-eff-rail">
+          <i className="hp-eff-fill" />
+        </div>
+        <div className="hp-eff-ticks">
+          {EFFORT_OPTIONS.map((opt, i) => (
+            <i key={opt.value} className={i <= index ? "on" : undefined} />
+          ))}
+        </div>
+        <div className="hp-eff-thumb" />
+      </div>
+      <div className="hp-eff-ax">
+        <span>{t.chatPanel.effortAxisOff}</span>
+        <span>{t.chatPanel.effortAxisUltra}</span>
+      </div>
+      {failed && <p className="hp-none">{t.chatPanel.notSaved}</p>}
     </div>
   );
 }

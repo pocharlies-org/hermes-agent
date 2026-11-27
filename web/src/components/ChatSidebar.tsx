@@ -25,12 +25,7 @@
  * terminal pane keeps working unimpaired.
  */
 
-import { Button } from '@nous-research/ui/ui/components/button'
-import { Badge } from '@nous-research/ui/ui/components/badge'
-import { Card } from '@nous-research/ui/ui/components/card'
-
 import { ModelPickerDialog } from '@/components/ModelPickerDialog'
-import { ModelReloadConfirm } from '@/components/ModelReloadConfirm'
 import { ReasoningPicker } from '@/components/ReasoningPicker'
 import { GatewayClient, type ConnectionState } from '@/lib/gatewayClient'
 import { EventsFeedClient } from '@/lib/eventsFeedClient'
@@ -48,6 +43,7 @@ import {
 } from '@/lib/events-reconnect'
 import { credentialWarning, sidecarErrorMessage } from '@/lib/chat-sidebar-banner'
 import { titleFromSessionInfoPayload } from '@/lib/chat-title'
+import { useI18n } from '@/i18n'
 
 import { cn } from '@/lib/utils'
 import { AlertCircle, ChevronDown, KeyRound, RefreshCw } from 'lucide-react'
@@ -62,22 +58,6 @@ interface SessionInfo {
   title?: string
 }
 
-const STATE_LABEL: Record<ConnectionState, string> = {
-  idle: 'idle',
-  connecting: 'connecting',
-  open: 'live',
-  closed: 'closed',
-  error: 'error'
-}
-
-const STATE_TONE: Record<ConnectionState, 'secondary' | 'warning' | 'success' | 'destructive'> = {
-  idle: 'secondary',
-  connecting: 'warning',
-  open: 'success',
-  closed: 'secondary',
-  error: 'destructive'
-}
-
 interface ChatSidebarProps {
   channel: string
   /** Chat profile from the dashboard switcher / URL scope. */
@@ -85,6 +65,11 @@ interface ChatSidebarProps {
   className?: string
   onDashboardNewSessionRequest?: () => void
   onSessionTitleChange?: (title: string | null) => void
+  /** Starts a fresh chat — how a just-saved model/effort is applied now
+   *  (the PendingApplyBand's primary action). */
+  onApplyNow?: () => void
+  /** Reports the sidecar connection state upward (the collapsed rail's dot). */
+  onConnectionState?: (state: ConnectionState) => void
 }
 
 /** Build the ``session.create`` params for the sidecar session.
@@ -107,9 +92,12 @@ export function ChatSidebar({
   profile,
   className,
   onDashboardNewSessionRequest,
-  onSessionTitleChange
+  onSessionTitleChange,
+  onApplyNow,
+  onConnectionState
 }: ChatSidebarProps) {
   const navigate = useNavigate()
+  const { t } = useI18n()
   // `version` bumps on reconnect (manual button, profile/channel switch) and
   // re-runs the socket effects. The clients themselves live for the whole
   // component: the shared client keeps per-session seq watermarks and asks
@@ -132,27 +120,38 @@ export function ChatSidebar({
   // this card stays scoped to the PTY even if the global dashboard switcher
   // changes while the chat is open.
   const [effectiveModel, setEffectiveModel] = useState('')
-  // Whether the effective model supports reasoning effort — gates the
-  // ReasoningPicker. Read from the same `/api/model/info` capabilities the
-  // (currently unused) ModelInfoCard surfaces, so the dashboard exposes a
-  // control to *set* the level, not just a read-only "Reasoning" badge.
-  const [supportsReasoning, setSupportsReasoning] = useState(false)
+  const [effectiveProvider, setEffectiveProvider] = useState('')
+  // Capabilities for the ModelCard's strip (context, tools, vision) and the
+  // gate on the ReasoningPicker. From `/api/model/info`.
+  // `reasoning` is null when the backend doesn't report it (`capabilities: {}`
+  // for litellm routes): unknown means SHOW the slider — the old UI always
+  // did, and hiding it on absent data regressed effort control entirely.
+  const [caps, setCaps] = useState<{ context: number; tools: boolean; vision: boolean; reasoning: boolean | null }>({
+    context: 0,
+    tools: false,
+    vision: false,
+    reasoning: null
+  })
   // Bumped on model change/save so ReasoningPicker re-reads the saved effort
   // (config is profile-scoped the same way the model badge is).
   const [modelRefreshKey, setModelRefreshKey] = useState(0)
-  // Set after the picker saves a model and the user declines the reload: config
-  // is updated but the running session keeps its model until rebuilt.
-  const [modelNotice, setModelNotice] = useState<string | null>(null)
-  // Short name of a just-saved model awaiting confirm to reload (a fresh chat
-  // session is how the running chat adopts it; we confirm before discarding it).
-  const [pendingReloadModel, setPendingReloadModel] = useState<string | null>(null)
+  // A just-saved model/effort the running chat hasn't adopted yet: rendered as
+  // the PendingApplyBand inside the ModelCard (replaces the old modelNotice
+  // card + ModelReloadConfirm dialog).
+  const [pending, setPending] = useState<'model' | 'effort' | null>(null)
 
   const refreshEffectiveModel = useCallback(() => {
     void api
       .getModelInfo(profile)
       .then(r => {
         if (r?.model) setEffectiveModel(String(r.model))
-        setSupportsReasoning(!!r?.capabilities?.supports_reasoning)
+        if (r?.provider) setEffectiveProvider(String(r.provider))
+        setCaps({
+          context: Number(r?.effective_context_length ?? r?.capabilities?.context_window ?? 0),
+          tools: !!r?.capabilities?.supports_tools,
+          vision: !!r?.capabilities?.supports_vision,
+          reasoning: r?.capabilities?.supports_reasoning ?? null
+        })
         // Bump so ReasoningPicker re-reads the saved effort for the new model.
         setModelRefreshKey(k => k + 1)
       })
@@ -185,7 +184,10 @@ export function ChatSidebar({
       setInfo({})
       setError(null)
     })
-    const offState = gw.onState(setState)
+    const offState = gw.onState(s => {
+      setState(s)
+      onConnectionState?.(s)
+    })
 
     const offSessionInfo = gw.on('session.info', ev => {
       // session.info is surface-specific on the wire; narrow to the fields this sidebar reads.
@@ -360,8 +362,7 @@ export function ChatSidebar({
 
   const reconnect = useCallback(() => {
     setError(null)
-    setModelNotice(null)
-    setPendingReloadModel(null)
+    setPending(null)
     setVersion(v => v + 1)
   }, [])
 
@@ -372,108 +373,143 @@ export function ChatSidebar({
   const credential = credentialWarning(info.credential_warning)
   const banner = error ?? credential?.message ?? null
   const showReload = isEventsAuthRejectionMessage(error)
+  const conn =
+    state === 'open'
+      ? { cls: '', label: t.chatPanel.conn.live }
+      : state === 'connecting'
+        ? { cls: 'warn', label: t.chatPanel.conn.connecting }
+        : state === 'idle'
+          ? { cls: 'warn', label: t.chatPanel.conn.idle }
+          : { cls: 'err', label: t.chatPanel.conn.offline }
+  const contextLabel =
+    caps.context >= 1024 ? `${Math.round(caps.context / 1024)} k` : caps.context > 0 ? String(caps.context) : ''
 
   return (
-    <aside
-      className={cn(
-        'flex h-full w-full min-w-0 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1',
-        className
-      )}
-    >
-      <Card className="flex items-center justify-between gap-2 px-3 py-2">
-        <div className="min-w-0 flex-1">
-          <div className="text-display text-xs tracking-wider text-text-tertiary">model</div>
-
-          <Button
-            ghost
-            size="sm"
-            onClick={() => setModelOpen(true)}
-            className={cn(
-              'max-w-full min-w-0 px-0 py-0',
-              'self-start normal-case tracking-normal text-sm font-medium',
-              'hover:underline disabled:no-underline'
-            )}
-            title={modelName === '—' ? 'switch model' : modelName}
-          >
-            <span className="flex min-w-0 max-w-full items-center gap-1">
-              <span className="truncate">{modelLabel}</span>
-
-              <ChevronDown className="size-3.5 shrink-0 text-text-secondary" />
+    <div className={cn('hp w-full min-w-0', className)}>
+      {/* ModelCard — name opens the picker, capabilities and the effort
+          slider live under it; a just-saved change shows the PendingApplyBand
+          inside the card instead of a dialog. */}
+      <div className="hp-shell">
+        <div className="hp-core hp-model">
+          <div className="hp-r1">
+            <span className="hp-k">{t.chatPanel.model}</span>
+            <span className={cn('hp-live', conn.cls)} role="status">
+              <i />
+              {conn.label}
             </span>
-          </Button>
+          </div>
+
+          <button
+            type="button"
+            className="hp-pick"
+            aria-haspopup="dialog"
+            title={modelName === '—' ? t.chatPanel.model : modelName}
+            onClick={() => setModelOpen(true)}
+          >
+            <strong>{modelLabel}</strong>
+            <span className="c">
+              <ChevronDown />
+            </span>
+          </button>
+          {effectiveProvider && <div className="hp-prov">{effectiveProvider}</div>}
+
+          {(contextLabel || caps.tools || caps.vision) && (
+            <div className="hp-caps">
+              {contextLabel && (
+                <span className="hp-ctx">
+                  <b>{contextLabel}</b>
+                  <small>{t.chatPanel.context}</small>
+                </span>
+              )}
+              {caps.tools && <span className="hp-tag">{t.chatPanel.tools}</span>}
+              {caps.vision && <span className="hp-tag">{t.chatPanel.vision}</span>}
+            </div>
+          )}
+
+          <div className="hp-sep" />
+
+          {caps.reasoning !== false ? (
+            <ReasoningPicker
+              currentModel={modelName}
+              profile={profile}
+              refreshKey={modelRefreshKey}
+              onChanged={() => setPending('effort')}
+            />
+          ) : (
+            <p className="hp-none">{t.chatPanel.noReasoning}</p>
+          )}
+
+          {pending && (
+            <div className="hp-pend" role="status">
+              <p>
+                <b>{t.chatPanel.saved}</b>{' '}
+                {pending === 'model'
+                  ? t.chatPanel.pendingModel.replace('{model}', modelLabel)
+                  : t.chatPanel.pendingEffort}
+              </p>
+              <div className="hp-acts">
+                <button
+                  type="button"
+                  className="hp-btn pri"
+                  onClick={() => {
+                    setPending(null)
+                    onApplyNow?.()
+                  }}
+                >
+                  {t.chatPanel.applyNow}
+                </button>
+                <button type="button" className="hp-btn ghost" onClick={() => setPending(null)}>
+                  {t.chatPanel.later}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-
-        <Badge tone={STATE_TONE[state]} className="shrink-0">
-          {STATE_LABEL[state]}
-        </Badge>
-      </Card>
-
-      {supportsReasoning && (
-        <Card className="py-0">
-          <ReasoningPicker
-            currentModel={modelName}
-            profile={profile}
-            refreshKey={modelRefreshKey}
-            onChanged={effort =>
-              setModelNotice(
-                `Reasoning effort set to ${effort}. Run /new or refresh the page to apply it to this chat.`
-              )
-            }
-          />
-        </Card>
-      )}
-
-      {modelNotice && (
-        <Card className="flex items-start gap-2 border-warning/40 bg-warning/5 px-3 py-2 text-xs">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-
-          <div className="wrap-break-word min-w-0 flex-1 text-text-secondary">{modelNotice}</div>
-        </Card>
-      )}
+      </div>
 
       {banner && (
-        <Card className="flex items-start gap-2 border-destructive/40 bg-destructive/5 px-3 py-2 text-xs">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
-
-          <div className="min-w-0 flex-1">
-            <div className="wrap-break-word text-destructive">{banner}</div>
-
-            {error && showReload && (
-              <Button
-                size="sm"
-                outlined
-                className="mt-1"
-                onClick={() => window.location.reload()}
-                prefix={<RefreshCw />}
-              >
-                Reload page
-              </Button>
-            )}
-            {error && !showReload && (
-              <Button size="sm" outlined className="mt-1" onClick={reconnect} prefix={<RefreshCw />}>
-                Reconnect side panel
-              </Button>
-            )}
-            {!error && credential && (
-              <div className="mt-1 flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  outlined
-                  prefix={<KeyRound />}
-                  // Router navigation: a full page load would tear down the
-                  // xterm scrollback and the chat sockets. (The mobile portal
-                  // still lives under ChatPage, so router context is present.)
-                  onClick={() => navigate('/env')}
-                >
-                  Add key
-                </Button>
-                <Button size="sm" outlined onClick={() => setModelOpen(true)}>
-                  Switch model
-                </Button>
-              </div>
-            )}
+        <div className={cn('hp-shell', error ? 'err' : 'warn')} role="alert">
+          <div className={cn('hp-core hp-alert', !error && 'warn')}>
+            {error ? <AlertCircle /> : <KeyRound />}
+            <div className="min-w-0">
+              <p className="wrap-break-word">
+                <b>{banner}</b>
+              </p>
+              {error && (
+                <div className="hp-acts">
+                  {showReload ? (
+                    <button type="button" className="hp-btn" onClick={() => window.location.reload()}>
+                      <RefreshCw />
+                      {t.chatPanel.reloadPage}
+                    </button>
+                  ) : (
+                    <button type="button" className="hp-btn" onClick={reconnect}>
+                      <RefreshCw />
+                      {t.chatPanel.reconnectPanel}
+                    </button>
+                  )}
+                </div>
+              )}
+              {!error && credential && (
+                <div className="hp-acts">
+                  <button
+                    type="button"
+                    className="hp-btn pri"
+                    // Router navigation: a full page load would tear down the
+                    // xterm scrollback and the chat sockets.
+                    onClick={() => navigate('/env')}
+                  >
+                    <KeyRound />
+                    {t.chatPanel.addKey}
+                  </button>
+                  <button type="button" className="hp-btn" onClick={() => setModelOpen(true)}>
+                    {t.chatPanel.switchModel}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </Card>
+        </div>
       )}
 
       {modelOpen && (
@@ -484,8 +520,7 @@ export function ChatSidebar({
           loader={() => api.getModelOptions(profile)}
           alwaysGlobal
           onApply={async ({ provider, model, confirmExpensiveModel }) => {
-            setModelNotice(null)
-            setPendingReloadModel(null)
+            setPending(null)
             const result = await api.setModelAssignment(
               {
                 confirm_expensive_model: confirmExpensiveModel,
@@ -499,8 +534,9 @@ export function ChatSidebar({
             // and calls back; don't announce until the user confirms.
             if (!result.confirm_required) {
               refreshEffectiveModel()
-              // Ask before reloading: applying the model starts a fresh chat.
-              setPendingReloadModel(model.split('/').slice(-1)[0])
+              // The running chat keeps its model until a fresh one starts —
+              // surfaced as the band, whose primary action starts it.
+              setPending('model')
             }
             return result
           }}
@@ -510,15 +546,6 @@ export function ChatSidebar({
           }}
         />
       )}
-
-      <ModelReloadConfirm
-        model={pendingReloadModel}
-        onCancel={() => {
-          const m = pendingReloadModel
-          setPendingReloadModel(null)
-          setModelNotice(`Model set to ${m}. Run /new or refresh the page to apply it to this chat.`)
-        }}
-      />
-    </aside>
+    </div>
   )
 }
