@@ -9,8 +9,8 @@
  *      credential warnings. Independent of the PTY pane's session by
  *      design. The model badge does NOT come from here: it reads the
  *      effective config model over REST (`/api/model/info`), and the model
- *      picker writes config over REST (`/api/model/set`) then offers a
- *      dashboard reload so the running chat adopts the new model.
+ *      picker writes config over REST (`/api/model/set`) then offers
+ *      "Apply now" (a fresh chat) so the running chat adopts the new model.
  *
  *   2. **Event subscriber** (/api/events?channel=…) — passive, receives
  *      every dispatcher emit from the PTY-side `tui_gateway.entry` that
@@ -366,8 +366,8 @@ export function ChatSidebar({
     setVersion(v => v + 1)
   }, [])
 
-  // The picker writes config.yaml over REST and reloads — it doesn't ride the
-  // sidecar gateway session, so it's available whenever the sidebar is mounted.
+  // The picker writes config.yaml over REST — it doesn't ride the sidecar
+  // gateway session, so it's available whenever the sidebar is mounted.
   const modelName = effectiveModel || info.model || '—'
   const modelLabel = modelName.split('/').slice(-1)[0] ?? '—'
   const credential = credentialWarning(info.credential_warning)

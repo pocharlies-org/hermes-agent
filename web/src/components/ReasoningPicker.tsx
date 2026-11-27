@@ -36,8 +36,6 @@ interface ReasoningPickerProps {
   /** Called after a successful change so the panel can show the
    *  "applies on the next chat" band, matching the model-switch UX. */
   onChanged?: (effort: string) => void;
-  /** Render the axis labels in the panel header row instead (unused here). */
-  disabled?: boolean;
 }
 
 const MAX = EFFORT_OPTIONS.length - 1; // 7 — eight steps, off → ultra
@@ -47,7 +45,6 @@ export function ReasoningPicker({
   profile,
   refreshKey = 0,
   onChanged,
-  disabled = false,
 }: ReasoningPickerProps) {
   const { t } = useI18n();
   const [effort, setEffort] = useState("medium");
@@ -123,16 +120,16 @@ export function ReasoningPicker({
       <div
         className={cn("hp-eff", saving && "saving")}
         role="slider"
-        tabIndex={disabled || !loaded ? -1 : 0}
+        tabIndex={loaded ? 0 : -1}
         aria-label={t.chatPanel.reasoning}
-        aria-disabled={disabled || !loaded}
+        aria-disabled={!loaded}
         aria-valuemin={0}
         aria-valuemax={MAX}
         aria-valuenow={index}
         aria-valuetext={label}
         style={{ "--v": index } as React.CSSProperties}
         onPointerDown={(e) => {
-          if (disabled || !loaded) return;
+          if (!loaded) return;
           dragRef.current = true;
           e.currentTarget.setPointerCapture(e.pointerId);
           const next = EFFORT_OPTIONS[valueFromEvent(e.clientX, e.currentTarget)];
@@ -157,7 +154,7 @@ export function ReasoningPicker({
           if (pending) commit(pending);
         }}
         onKeyDown={(e) => {
-          if (disabled || !loaded) return;
+          if (!loaded) return;
           if (e.key === "ArrowRight" || e.key === "ArrowUp") {
             e.preventDefault();
             commit(EFFORT_OPTIONS[Math.min(MAX, index + 1)].value);

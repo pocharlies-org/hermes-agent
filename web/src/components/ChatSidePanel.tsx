@@ -70,12 +70,10 @@ export function useRailModel(profile: string | undefined, active: boolean, refre
 
 export function PanelHeader({
   profile,
-  collapsed,
   narrow,
   onToggle,
 }: {
   profile?: string;
-  collapsed: boolean;
   narrow: boolean;
   onToggle: () => void;
 }) {
@@ -90,8 +88,8 @@ export function PanelHeader({
         type="button"
         className="hp-ib"
         onClick={onToggle}
-        aria-label={narrow ? t.app.closeModelTools : collapsed ? t.chatPanel.expand : t.chatPanel.collapse}
-        title={collapsed ? t.chatPanel.expand : t.chatPanel.collapse}
+        aria-label={narrow ? t.app.closeModelTools : t.chatPanel.collapse}
+        title={t.chatPanel.collapse}
       >
         <PanelRightOpen />
       </button>

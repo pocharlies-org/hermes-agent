@@ -379,7 +379,6 @@ html[data-theme-tone="light"] {
 .hp-alert.warn > svg { color: var(--hp-warn); }
 .hp-alert p { font-size: 12.5px; line-height: 1.5; }
 .hp-alert p b { font-weight: 500; }
-.hp-alert p span { color: var(--hp-muted); }
 .hp-alert .hp-acts { margin-top: 10px; }
 
 .hp-ses { flex: 1; min-height: 0; display: flex; }

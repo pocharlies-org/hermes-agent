@@ -1858,7 +1858,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           {sheetMode && <div className="hp-grab" aria-hidden="true" />}
           <PanelHeader
             profile={scopedProfile}
-            collapsed={false}
             narrow
             onToggle={closeMobilePanel}
           />
@@ -2053,7 +2052,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           >
             <PanelHeader
               profile={scopedProfile}
-              collapsed={false}
               narrow={false}
               onToggle={toggleChatPanel}
             />

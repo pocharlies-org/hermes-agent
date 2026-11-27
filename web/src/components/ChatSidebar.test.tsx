@@ -65,22 +65,8 @@ vi.mock('@/lib/gatewayClient', () => ({
 vi.mock('@/components/ModelPickerDialog', () => ({
   ModelPickerDialog: () => null
 }))
-vi.mock('@/components/ModelReloadConfirm', () => ({
-  ModelReloadConfirm: () => null
-}))
 vi.mock('@/components/ReasoningPicker', () => ({
   ReasoningPicker: () => null
-}))
-vi.mock('@nous-research/ui/ui/components/button', () => ({
-  Button: ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
-    <button onClick={onClick}>{children}</button>
-  )
-}))
-vi.mock('@nous-research/ui/ui/components/badge', () => ({
-  Badge: ({ children }: { children?: ReactNode }) => <span>{children}</span>
-}))
-vi.mock('@nous-research/ui/ui/components/card', () => ({
-  Card: ({ children }: { children?: ReactNode }) => <div>{children}</div>
 }))
 
 type EventLike = { code?: number; data?: string }
@@ -398,7 +384,7 @@ describe('ChatSidebar event socket reconnect', () => {
       FakeWebSocket.instances[1].emit('open', {})
     })
 
-    // Banner gone entirely — including the "Reconnect side panel" button,
+    // Banner gone entirely — including the "Reconnect panel" button,
     // which only renders while `error` is set.
     expect(container.textContent).not.toContain('Live tool activity')
   })
