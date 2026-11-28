@@ -1,27 +1,14 @@
 # Overlay image: the files this branch changes, on top of the live image.
-# Stacked overlay DGX-1900 (chat side panel redesign): base = fork-d923a5e-p3a96b32 (the live tag
-# of the chart: upstream v0.22.2 + the python overlays of this branch, last one DGX-1621).
-# What changes here is the dashboard, so this overlay carries the BUILT frontend: `web/` of this
-# branch (the panel redesign, main PR #37) rebuilt with the repo's own recipe — node-deps.mjs for
-# the workspace deps, generate_icons.py for the icon set, scripts/build/web.mjs for the bundle —
-# and only the resulting dist lands in the runtime layer. The Node dependencies of the build stage
-# never enter the final image, same as upstream's Dockerfile (frontend deps are not runtime deps).
-# DGX-1928: the branch also carries python fixes (#39/#41, audio→Telegram voice bubble) that the
-# dashboard-only overlay silently dropped — every file the branch changes over the base is copied
-# explicitly here; adding one to the branch means adding it below.
-ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p3a96b32
-
-FROM ${BASE} AS dashboard_build
-USER root
-WORKDIR /opt/hermes
-# The branch's frontend source over the base's (the base carries the deploy line's web/ byte for
-# byte, so this only adds the redesign). Deps and build tools are already in the base image.
-COPY web/ web/
-RUN node scripts/build/node-deps.mjs --source /opt/hermes --workspace web \
- && /opt/hermes/.venv/bin/python -I scripts/generate_icons.py --source /opt/hermes --out /tmp/hermes-icons \
- && node scripts/build/web.mjs --source /opt/hermes --icons /tmp/hermes-icons --out /opt/products/web
-
+# DGX-1948: POST /v1/warm — prefill the profile's model prefix in the connect→speak gap so the first
+# spoken turn does not pay the resident's cold/queued prefill. The code is merged on main (PR #44,
+# f76f0ac) but the deploy line is its own lineage (upstream v0.22.2 + X-Hermes-User + dashboard +
+# tools), so the two files are ported here byte for byte onto the LIVE tag.
+# Verified before building: the BASE files answer to the live pod's shas——
+#   api_server.py                 02ee4a8c44303547b329b41f259efe5b543ef3687323eac2528e393dbee3101a
+#   api_server_openai_routes.py   1a98b0d1973f1a5e2d14daaca1b4f7e167f072c7ca6ec379523246187796e4a8
+# The COPY introduces ONLY the /warm delta (one route row + two methods); everything else on the
+# deploy lineage stays as the base bytes.
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p37b5824
 FROM ${BASE}
-COPY --from=dashboard_build /opt/products/web /opt/hermes/hermes_cli/web_dist
-# Voice-bubble fixes (#39 forward is_voice to send_voice, #41 transcode before direct-bot send).
-COPY tools/send_message_tool.py tools/send_message_senders.py tools/
+COPY --chmod=644 gateway/platforms/api_server.py /opt/hermes/gateway/platforms/api_server.py
+COPY --chmod=644 gateway/platforms/api_server_openai_routes.py /opt/hermes/gateway/platforms/api_server_openai_routes.py

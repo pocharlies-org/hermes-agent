@@ -565,6 +565,62 @@ class OpenAICompatRoutesMixin:
             requested_provider=overrides.get("requested_provider"), route=route)
         return route, overrides, (_error_response(err, 400) if err else None)
 
+    async def _handle_warm(self, request: "web.Request") -> "web.Response":
+        """POST /v1/warm (DGX-1948) — prefill the model prefix for the profile WITHOUT running a turn.
+
+        The voice frontend fires this on connect and forgets. It resolves the SAME route/model the next
+        real turn will use and builds the SAME system bytes (cached prompt + ephemeral system, appended
+        exactly as ``turn_context`` does), then issues ONE ``max_tokens=1`` completion on the agent's own
+        client — tools included, because the chat template renders them into the prompt and omitting them
+        would diverge the tokenized prefix. No session row, no user message, no memory write; the work runs
+        in a tracked background task and any failure is logged, never surfaced.
+        """
+        from gateway.platforms.api_server import _api_request_profile, _normalize_chat_content
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON in request body"}, status=400)
+        system_prompt = None
+        for msg in body.get("messages") or []:
+            if isinstance(msg, dict) and msg.get("role") == "system":
+                content = _normalize_chat_content(msg.get("content", ""))
+                system_prompt = content if system_prompt is None else system_prompt + "\n" + content
+        route, agent_overrides, selection_error = self._select_request_route(
+            body, session_id=None, gateway_session_key=None,
+            model_alias=body.get("model", self._model_name))
+        if selection_error is not None:
+            return selection_error
+        request_profile = _api_request_profile.get()
+        # shortcut: the caller fires once per voice connection; revisit if a warm storm ever shows up
+        self._track_background_task(asyncio.create_task(
+            self._run_warm(request_profile, route, agent_overrides, system_prompt)))
+        return web.json_response({"status": "warming"}, status=202)
+
+    async def _run_warm(self, request_profile, route, agent_overrides, system_prompt) -> None:
+        def _run():
+            agent = None
+            try:
+                with self._profile_scope(request_profile):  # contextvars don't cross threads
+                    agent = self._create_agent(
+                        ephemeral_system_prompt=system_prompt, session_id=None,
+                        gateway_session_key=None, route=route, **agent_overrides)
+                    system = agent._build_system_prompt(None) or ""
+                    if agent.ephemeral_system_prompt:
+                        system = (system + "\n\n" + agent.ephemeral_system_prompt).strip()
+                    agent.client.chat.completions.create(
+                        model=agent.model, max_tokens=1, stream=False,
+                        messages=[{"role": "system", "content": system},
+                                  {"role": "user", "content": "warmup"}],
+                        tools=agent.tools or None)
+            except Exception:  # warming is best-effort, never a failed turn
+                logger.debug("[%s] warm failed", self.name, exc_info=True)
+            finally:
+                if agent is not None:
+                    with suppress(Exception):
+                        agent.close()
+
+        await asyncio.to_thread(_run)
+
     def _register_stream_approval(self, request, completion_id, stream_q, session_id) -> tuple:
         """Expose a streaming completion as a run for ``POST /v1/runs/{completion_id}/approval``
         (#51871) -> ``(notify, on_done)``. Owner + status are stamped like the session stream, so
