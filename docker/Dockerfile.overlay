@@ -6,6 +6,9 @@
 # the workspace deps, generate_icons.py for the icon set, scripts/build/web.mjs for the bundle —
 # and only the resulting dist lands in the runtime layer. The Node dependencies of the build stage
 # never enter the final image, same as upstream's Dockerfile (frontend deps are not runtime deps).
+# DGX-1928: the branch also carries python fixes (#39/#41, audio→Telegram voice bubble) that the
+# dashboard-only overlay silently dropped — every file the branch changes over the base is copied
+# explicitly here; adding one to the branch means adding it below.
 ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p3a96b32
 
 FROM ${BASE} AS dashboard_build
@@ -20,3 +23,5 @@ RUN node scripts/build/node-deps.mjs --source /opt/hermes --workspace web \
 
 FROM ${BASE}
 COPY --from=dashboard_build /opt/products/web /opt/hermes/hermes_cli/web_dist
+# Voice-bubble fixes (#39 forward is_voice to send_voice, #41 transcode before direct-bot send).
+COPY tools/send_message_tool.py tools/send_message_senders.py tools/
