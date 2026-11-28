@@ -349,6 +349,30 @@ for f in \
     fi
 done
 
+# Reset ownership of the PM install-state lock files on every boot, same
+# docker-exec/root-write reason as profiles/, cron/ and pairing/: a
+# root-context launch (kubectl exec, or any uid-0 writer on the shared
+# $HERMES_HOME) leaves installs/<key>/.recovery.lock 0600 root-owned, and the
+# next supervised startup (uid 10000) dies on it in _claim_recovery_lock
+# (hermes_cli/_early_recovery.py) before the gateway comes up — a deploy-time
+# crash loop that no restart heals (DEPL-21362, 28-11).
+# shortcut: allowlist of the startup-blocking names only (the same contract as
+# the top-level sweep above); a root-owned file deeper under installs/ (a venv
+# generation) is not healed — extend to a gated tree_has_non_hermes_owner walk
+# if one ever blocks startup.
+for lock in "$HERMES_HOME"/installs/*/.recovery.lock \
+            "$HERMES_HOME"/installs/*/.install.lock \
+            "$HERMES_HOME"/installs/*/.repair-incomplete \
+            "$HERMES_HOME"/installs/*/facts.json; do
+    if [ -e "$lock" ]; then
+        if refuse_symlinked_path "chown" "$lock"; then
+            :
+        else
+            chown hermes:hermes "$lock" 2>/dev/null || true
+        fi
+    fi
+done
+
 # --- config.yaml permissions ---
 # Ensure config.yaml is readable by the hermes runtime user even if it
 # was edited on the host after initial ownership setup.
