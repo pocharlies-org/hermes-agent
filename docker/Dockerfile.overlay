@@ -1,14 +1,10 @@
 # Overlay image: the files this branch changes, on top of the live image.
-# DGX-1948: POST /v1/warm — prefill the profile's model prefix in the connect→speak gap so the first
-# spoken turn does not pay the resident's cold/queued prefill. The code is merged on main (PR #44,
-# f76f0ac) but the deploy line is its own lineage (upstream v0.22.2 + X-Hermes-User + dashboard +
-# tools), so the two files are ported here byte for byte onto the LIVE tag.
-# Verified before building: the BASE files answer to the live pod's shas——
-#   api_server.py                 02ee4a8c44303547b329b41f259efe5b543ef3687323eac2528e393dbee3101a
-#   api_server_openai_routes.py   1a98b0d1973f1a5e2d14daaca1b4f7e167f072c7ca6ec379523246187796e4a8
-# The COPY introduces ONLY the /warm delta (one route row + two methods); everything else on the
-# deploy lineage stays as the base bytes.
-ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p37b5824
+# DGX-1963: stage2-hook re-chownea los ficheros de estado de arranque bajo
+# installs/*/ en cada boot — un .recovery.lock root-owned (escritor uid 0 sobre el
+# PVC compartido) tumbaba el arranque supervisado (uid 10000) con PermissionError
+# en _claim_recovery_lock y el gateway entraba en crash-loop sin curarse con
+# ningún restart (DEPL-21362, pin DGX-1948). El bloque va byte a byte como el de
+# main (PR #45); el resto de la línea de deploy queda como los bytes de la base.
+ARG BASE=harbor.lan.e-dani.com/homelab/hermes-agent:fork-d923a5e-p2b47af46
 FROM ${BASE}
-COPY --chmod=644 gateway/platforms/api_server.py /opt/hermes/gateway/platforms/api_server.py
-COPY --chmod=644 gateway/platforms/api_server_openai_routes.py /opt/hermes/gateway/platforms/api_server_openai_routes.py
+COPY --chmod=755 docker/stage2-hook.sh /etc/cont-init.d/01-hermes-setup
